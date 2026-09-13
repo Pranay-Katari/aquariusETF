@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    environment:
+      APP_MODE: demo
+      DATABASE_URL: sqlite:////app/data/aquarius.db
+      DATA_DIR: /app/data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - aquarius-data:/app/data
+    ports:
+      - '127.0.0.1:8000:8000'
+    depends_on:
+      - redis
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        API_URL: http://api:8000
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      - api
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+volumes:
+  aquarius-data:

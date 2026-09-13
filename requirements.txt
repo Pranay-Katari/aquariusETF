@@ -1,0 +1,11 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+sqlalchemy>=2.0,<3
+psycopg[binary]>=3.2,<4
+httpx>=0.28,<1
+pydantic-settings>=2.7,<3
+pandas>=2.2,<3
+pyarrow>=23,<30
+pandas-market-calendars>=5,<6
+redis>=5,<7
+pytest>=8,<9
