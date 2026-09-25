@@ -31,9 +31,12 @@ class Holding(StrictModel):
 
 class PortfolioInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
-    symbol: str = Field(default="", max_length=12)
+    symbol: str = Field(default="", max_length=20)
     description: str = Field(default="", max_length=4000)
     holdings: list[Holding] = Field(default_factory=list, max_length=50)
+    # Simulation preferences belong to the saved container as well, so reopening a
+    # portfolio restores its backtest assumptions even before it has a result.
+    config: dict = Field(default_factory=dict)
 
     @field_validator("name")
     @classmethod
@@ -89,10 +92,39 @@ class BacktestInput(StrictModel):
         return self
 
 
+class OptimizeInput(StrictModel):
+    portfolio_version: int = Field(ge=1)
+    start_date: date
+    end_date: date
+    initial_capital: float = Field(default=10000, ge=100, le=1e9)
+    benchmark: Literal["SPY", "QQQ"] = "SPY"
+    rebalance_frequency: Literal["none", "monthly", "quarterly"] = "monthly"
+    commission_bps: float = Field(default=0, ge=0, le=100)
+    slippage_bps: float = Field(default=0, ge=0, le=100)
+    dividend_mode: Literal["total_return"] = "total_return"
+    risk_free_rate: float = Field(default=0, ge=0, le=0.25)
+
+    @model_validator(mode="after")
+    def valid_dates(self):
+        if self.start_date >= self.end_date:
+            raise ValueError("Start date must precede end date")
+        if self.end_date > date.today() or (self.end_date - self.start_date).days > 3653:
+            raise ValueError("Choose a completed period of up to 10 years")
+        return self
+
+
+class WalkForwardInput(OptimizeInput):
+    test_sessions: int = Field(default=63, ge=20, le=252)
+
+
 class ResearchInput(StrictModel):
-    prompt: str = Field(min_length=8, max_length=2000)
-    max_holdings: int = Field(default=8, ge=2, le=20)
-    max_weight: float = Field(default=0.25, ge=0.05, le=1)
+    required_tickers: list[str] = Field(default_factory=list, max_length=50)
+    excluded_tickers: list[str] = Field(default_factory=list, max_length=50)
+    weighting: Literal["equal", "theme"] = "theme"
+    sector: str = Field(default="", max_length=80)
+    prompt: str = Field(min_length=8, max_length=12000)
+    max_holdings: int = Field(default=8, ge=2, le=50)
+    max_weight: float = Field(default=0.25, ge=0.02, le=1)
 
 
 class PreviewInput(StrictModel):
@@ -104,3 +136,30 @@ class PreviewInput(StrictModel):
 class PaperInput(StrictModel):
     preview_id: str
     confirmed: Literal[True]
+
+
+class ChatTurn(StrictModel):
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class ResearchChatInput(StrictModel):
+    history: list[ChatTurn] = Field(default_factory=list, max_length=40)
+    current_proposal: PortfolioInput | None = None
+    weighting: Literal["equal", "theme"] = "theme"
+    messages: list[str] = Field(min_length=1, max_length=20)
+    sector: str = Field(default="", max_length=80)
+    max_holdings: int = Field(default=8, ge=2, le=50)
+    max_weight: float = Field(default=0.25, ge=0.02, le=1)
+
+    @field_validator("messages")
+    @classmethod
+    def bounded_messages(cls, values):
+        if (
+            any(not v.strip() or len(v) > 1000 for v in values)
+            or sum(map(len, values)) > 12000
+        ):
+            raise ValueError(
+                "Keep each message under 1,000 characters and the conversation under 12,000 characters. Start a new chat for a new idea."
+            )
+        return [v.strip() for v in values]

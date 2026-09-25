@@ -18,6 +18,7 @@ export type ETF = {
   name: string;
   symbol: string;
   description: string;
+  config?: Config;
   version: number;
   holdings: Holding[];
   created_at: string;
@@ -74,5 +75,38 @@ export type Preview = {
   residual_cash: number;
   broker_validated: boolean;
   expires_at: string;
+  warning: string;
+};
+export type PaperOrder = {
+  intent?: { symbol: string; notional: string; side: string };
+  status: string;
+  external_order_id?: string;
+  filled_qty?: string | null;
+  filled_avg_price?: string | null;
+};
+export type BucketPaperActivity = {
+  id: string;
+  investment: number;
+  created_at: string;
+  expires_at: string | null;
+  orders: PaperOrder[];
+};
+export type WalkForward = {
+  folds: {
+    training_end: string;
+    test_start: string;
+    test_end: string;
+    weights: Record<string, number>;
+    training_total_return: number;
+    unseen_total_return: number;
+    unseen_benchmark_return: number;
+    unseen_max_drawdown: number;
+  }[];
+  summary: {
+    median_unseen_return: number;
+    mean_unseen_return: number;
+    mean_unseen_benchmark_return: number;
+    win_rate_vs_benchmark: number;
+  };
   warning: string;
 };

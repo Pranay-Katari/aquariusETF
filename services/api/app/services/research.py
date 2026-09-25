@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 import math
+import re
+from .sectors import sector_tickers
 from .market import CATALOG, market
 from ..schemas import ResearchInput, PortfolioInput
 
@@ -41,7 +43,7 @@ def generate(request: ResearchInput):
     matches = [
         (name, tickers)
         for name, (keywords, tickers) in THEMES.items()
-        if any(k in prompt for k in keywords)
+        if any(re.search(r"\b" + re.escape(k) + r"\b", prompt) for k in keywords)
     ]
     if not matches:
         raise ValueError(
@@ -56,6 +58,9 @@ def generate(request: ResearchInput):
         raise ValueError(
             "This starter does not interpret free-text exclusion or fundamental constraints. Build those manually; holding count and maximum weight are enforced below."
         )
+    eligible = sector_tickers(request.sector)
+    if eligible is not None:
+        tickers = [t for t in tickers if t in eligible]
     tickers = tickers[: request.max_holdings]
     if len(tickers) < math.ceil(1 / request.max_weight - 1e-9):
         raise ValueError(

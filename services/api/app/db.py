@@ -32,6 +32,7 @@ class ETF(Base):
     name: Mapped[str] = mapped_column(String(120))
     symbol: Mapped[str] = mapped_column(String(12), default="")
     description: Mapped[str] = mapped_column(String(4000), default="")
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_storage_bucket: str = ""
-    market_data_provider: str = "synthetic"
+    # Yahoo's public chart feed supplies split- and dividend-adjusted close history
+    # without requiring a separate retail API key. Synthetic data remains available
+    # only as an explicit demo fallback.
+    market_data_provider: str = "yahoo"
     market_data_api_key: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     research_provider: str = "curated"

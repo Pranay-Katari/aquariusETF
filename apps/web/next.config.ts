@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
   output: "standalone",
-  experimental: { proxyTimeout: 270000 },
+  experimental: { proxyTimeout: 400000 },
   outputFileTracingRoot: process.cwd(),
   turbopack: { root: process.cwd() },
   async rewrites() {

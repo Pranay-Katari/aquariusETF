@@ -90,3 +90,54 @@ def test_no_source_fails_closed(monkeypatch):
     monkeypatch.setattr(ai_research, "call_response", lambda _: {"output": []})
     with pytest.raises(ValueError, match="no verifiable"):
         ai_research.generate_ai(ResearchInput(prompt="AI infrastructure"))
+
+
+def test_numbered_sources_resolve_to_actual_urls(monkeypatch):
+    search, parsed = responses()
+    proposal = json.loads(parsed["output"][0]["content"][0]["text"])
+    for candidate in proposal["candidates"]:
+        candidate.pop("source_urls")
+        candidate["source_ids"] = [0]
+    parsed["output"][0]["content"][0]["text"] = json.dumps(proposal)
+    reply = iter([search, parsed])
+    monkeypatch.setattr(ai_research, "call_response", lambda _: next(reply))
+    portfolio, _ = ai_research.generate_ai(
+        ResearchInput(prompt="AI infrastructure", max_holdings=2, max_weight=0.6)
+    )
+    assert all(h.sources[0].url == URL for h in portfolio.holdings)
+    assert portfolio.holdings[0].target_weight > portfolio.holdings[1].target_weight
+
+
+def test_unknown_numbered_source_rejected(monkeypatch):
+    search, parsed = responses()
+    proposal = json.loads(parsed["output"][0]["content"][0]["text"])
+    proposal["candidates"][0].pop("source_urls")
+    proposal["candidates"][0]["source_ids"] = [999]
+    parsed["output"][0]["content"][0]["text"] = json.dumps(proposal)
+    reply = iter([search, parsed])
+    monkeypatch.setattr(ai_research, "call_response", lambda _: next(reply))
+    with pytest.raises(ValueError, match="unknown source"):
+        ai_research.generate_ai(
+            ResearchInput(prompt="AI infrastructure", max_holdings=2, max_weight=0.5)
+        )
+
+
+@pytest.mark.parametrize(
+    "constraints, message",
+    [
+        ({"required_tickers": ["NOW"]}, "requested companies"),
+        ({"excluded_tickers": ["NVDA"]}, "excluded companies"),
+    ],
+)
+def test_company_constraints_are_enforced(monkeypatch, constraints, message):
+    reply = iter(responses())
+    monkeypatch.setattr(ai_research, "call_response", lambda _: next(reply))
+    with pytest.raises(ValueError, match=message):
+        ai_research.generate_ai(
+            ResearchInput(
+                prompt="AI infrastructure",
+                max_holdings=2,
+                max_weight=0.5,
+                **constraints,
+            )
+        )

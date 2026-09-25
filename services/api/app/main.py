@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from typing import Literal
 import pandas as pd
+import numpy as np
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -31,7 +32,10 @@ from .schemas import (
     PortfolioUpdate,
     HoldingsUpdate,
     BacktestInput,
+    OptimizeInput,
+    WalkForwardInput,
     ResearchInput,
+    ResearchChatInput,
     PreviewInput,
     PaperInput,
 )
@@ -63,12 +67,12 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="Aquarius ETF Research API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Aquarius Baskets API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "PUT"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -151,6 +155,7 @@ def serialize_etf(db, etf):
         "name": etf.name,
         "symbol": etf.symbol,
         "description": etf.description,
+        "config": etf.config or {},
         "version": etf.version,
         "holdings": holdings_for(db, etf.id),
         "created_at": etf.created_at.isoformat(),
@@ -167,7 +172,11 @@ def validate_symbols(holdings):
 def create_portfolio(db, body, user):
     validate_symbols(body.holdings)
     etf = ETF(
-        user_id=user, name=body.name, symbol=body.symbol, description=body.description
+        user_id=user,
+        name=body.name,
+        symbol=body.symbol,
+        description=body.description,
+        config=body.config,
     )
     db.add(etf)
     db.flush()
@@ -199,7 +208,7 @@ def generate_etf(
     body: ResearchInput, user=Depends(limited_user), db: DBSession = Depends(get_db)
 ):
     try:
-        if settings.research_provider == "openai":
+        if settings.research_provider in ("openai", "openrouter"):
             from .services.ai_research import generate_ai
 
             proposal, audit = generate_ai(body)
@@ -239,6 +248,7 @@ def patch_etf(
             name=body.name,
             symbol=body.symbol,
             description=body.description,
+            config=body.config,
             version=new_version,
             updated_at=now(),
         )
@@ -254,6 +264,24 @@ def patch_etf(
     db.commit()
     db.refresh(etf)
     return serialize_etf(db, etf)
+
+
+@app.delete("/v1/etfs/{id}", status_code=204)
+def delete_etf(
+    id: str, user=Depends(limited_user), db: DBSession = Depends(get_db)
+):
+    """Permanently remove one of the signed-in user's containers and its history."""
+    etf = owned(db, ETF, id, user)
+    preview_ids = list(
+        db.scalars(select(OrderPreview.id).where(OrderPreview.etf_id == id))
+    )
+    if preview_ids:
+        db.execute(delete(Order).where(Order.preview_id.in_(preview_ids)))
+    db.execute(delete(OrderPreview).where(OrderPreview.etf_id == id))
+    db.execute(delete(ResearchRun).where(ResearchRun.etf_id == id))
+    db.execute(delete(Backtest).where(Backtest.etf_id == id))
+    db.delete(etf)
+    db.commit()
 
 
 @app.put("/v1/etfs/{id}/holdings")
@@ -426,6 +454,161 @@ def create_backtest(
     return summary(row)
 
 
+@app.post("/v1/etfs/{id}/optimize")
+def optimize_weights(
+    id: str,
+    body: OptimizeInput,
+    user=Depends(limited_user),
+    db: DBSession = Depends(get_db),
+):
+    """Search constrained whole-percent allocations over the current backtest period.
+
+    This is deliberately a retrospective exploration tool: it never claims to predict
+    future returns and does not save the proposed weights automatically.
+    """
+    etf = owned(db, ETF, id, user)
+    if etf.version != body.portfolio_version:
+        raise HTTPException(409, "Save or reload the current portfolio before optimizing")
+    holdings = holdings_for(db, id)
+    count = len(holdings)
+    if not 2 <= count <= 25:
+        raise HTTPException(422, "Optimization requires 2–25 holdings")
+    cfg = body.model_dump(mode="json")
+    start, end = body.start_date, body.end_date
+    try:
+        symbols = sorted({h["ticker"] for h in holdings} | {body.benchmark})
+        history = {symbol: market.prices(symbol, start, end) for symbol in symbols}
+        expected = set(sessions(start, end))
+        if any(expected - set(series.index) for series in history.values()):
+            raise MarketError("The selected period has incomplete price history")
+        prices = pd.DataFrame({h["ticker"]: history[h["ticker"]] for h in holdings})
+        benchmark = history[body.benchmark]
+        rng = np.random.default_rng(int(canonical_hash({"id": id, "config": cfg})[:16], 16))
+        # Each name gets at least 1% and at most 50%, preventing a trivial one-name answer.
+        candidates = [np.full(count, 100 // count, dtype=int)]
+        candidates[0][: 100 % count] += 1
+        if count == 2:
+            # With the 50% cap, this is the only valid two-name allocation.
+            candidates = [np.array([50, 50], dtype=int)]
+        else:
+            while len(candidates) < 500:
+                weights = np.ones(count, dtype=int)
+                remaining = 100 - count
+                proposal = weights + rng.multinomial(remaining, rng.dirichlet(np.ones(count)))
+                if proposal.max() <= 50:
+                    candidates.append(proposal)
+        best_weights, best_result = candidates[0], None
+        for candidate in candidates:
+            trial = [{**holding, "target_weight": int(weight) / 100} for holding, weight in zip(holdings, candidate)]
+            outcome = simulate(prices, benchmark, trial, cfg)
+            if best_result is None or outcome["metrics"]["ending_value"] > best_result["metrics"]["ending_value"]:
+                best_weights, best_result = candidate, outcome
+    except MarketError as exc:
+        raise HTTPException(422, str(exc))
+    return {
+        "holdings": [{**holding, "target_weight": int(weight) / 100} for holding, weight in zip(holdings, best_weights)],
+        "metrics": best_result["metrics"],
+        "constraints": {"min_weight_percent": 1, "max_weight_percent": 50, "candidates_tested": len(candidates)},
+        "warning": "In-sample optimization: these weights maximize historical ending value only over the selected period and are prone to overfitting. Review before saving or backtesting.",
+    }
+
+
+@app.post("/v1/etfs/{id}/walk-forward")
+def walk_forward_validate(
+    id: str,
+    body: WalkForwardInput,
+    user=Depends(limited_user),
+    db: DBSession = Depends(get_db),
+):
+    """Optimize only on each training window, then score the next unseen sessions."""
+    etf = owned(db, ETF, id, user)
+    if etf.version != body.portfolio_version:
+        raise HTTPException(409, "Save or reload the current portfolio before validating")
+    holdings = holdings_for(db, id)
+    count = len(holdings)
+    if not 2 <= count <= 25:
+        raise HTTPException(422, "Walk-forward validation requires 2–25 holdings")
+    cfg = body.model_dump(mode="json", exclude={"test_sessions"})
+    try:
+        symbols = sorted({h["ticker"] for h in holdings} | {body.benchmark})
+        history = {symbol: market.prices(symbol, body.start_date, body.end_date) for symbol in symbols}
+        frame = pd.DataFrame(history).dropna().sort_index()
+        if len(frame) < body.test_sessions * 3 + 126:
+            raise MarketError(
+                "Choose a longer period: walk-forward validation needs 126 training sessions plus three unseen test windows"
+            )
+        # Three expanding training windows, each followed by a strictly unseen test block.
+        first_test = len(frame) - body.test_sessions * 3
+        folds = []
+        for fold in range(3):
+            train_end = first_test + fold * body.test_sessions
+            train_prices = frame.iloc[:train_end]
+            test_prices = frame.iloc[train_end : train_end + body.test_sessions]
+            seed = int(canonical_hash({"id": id, "fold": fold, "config": cfg})[:16], 16)
+            rng = np.random.default_rng(seed)
+            candidates = [np.full(count, 100 // count, dtype=int)]
+            candidates[0][: 100 % count] += 1
+            if count == 2:
+                candidates = [np.array([50, 50], dtype=int)]
+            else:
+                while len(candidates) < 300:
+                    proposal = np.ones(count, dtype=int) + rng.multinomial(
+                        100 - count, rng.dirichlet(np.ones(count))
+                    )
+                    if proposal.max() <= 50:
+                        candidates.append(proposal)
+            best_weights, best_training = candidates[0], None
+            for candidate in candidates:
+                trial = [
+                    {**holding, "target_weight": int(weight) / 100}
+                    for holding, weight in zip(holdings, candidate)
+                ]
+                outcome = simulate(
+                    train_prices[[h["ticker"] for h in holdings]],
+                    train_prices[body.benchmark],
+                    trial,
+                    cfg,
+                )
+                if best_training is None or outcome["metrics"]["ending_value"] > best_training["metrics"]["ending_value"]:
+                    best_weights, best_training = candidate, outcome
+            selected = [
+                {**holding, "target_weight": int(weight) / 100}
+                for holding, weight in zip(holdings, best_weights)
+            ]
+            unseen = simulate(
+                test_prices[[h["ticker"] for h in holdings]],
+                test_prices[body.benchmark],
+                selected,
+                cfg,
+            )
+            folds.append(
+                {
+                    "training_end": str(train_prices.index[-1]),
+                    "test_start": str(test_prices.index[0]),
+                    "test_end": str(test_prices.index[-1]),
+                    "weights": {h["ticker"]: int(w) for h, w in zip(holdings, best_weights)},
+                    "training_total_return": best_training["metrics"]["total_return"],
+                    "unseen_total_return": unseen["metrics"]["total_return"],
+                    "unseen_benchmark_return": unseen["metrics"]["benchmark_return"],
+                    "unseen_max_drawdown": unseen["metrics"]["max_drawdown"],
+                }
+            )
+    except (MarketError, ValueError) as exc:
+        raise HTTPException(422, str(exc))
+    unseen_returns = [fold["unseen_total_return"] for fold in folds]
+    benchmark_returns = [fold["unseen_benchmark_return"] for fold in folds]
+    return {
+        "folds": folds,
+        "summary": {
+            "median_unseen_return": float(np.median(unseen_returns)),
+            "mean_unseen_return": float(np.mean(unseen_returns)),
+            "mean_unseen_benchmark_return": float(np.mean(benchmark_returns)),
+            "win_rate_vs_benchmark": float(np.mean(np.array(unseen_returns) > np.array(benchmark_returns))),
+        },
+        "warning": "Each fold chooses weights only from data available before its test window. This reduces, but does not eliminate, selection bias; it is not a forecast or a recommendation.",
+    }
+
+
 @app.get("/v1/etfs/{id}/backtests")
 def list_backtests(
     id: str, user=Depends(current_user), db: DBSession = Depends(get_db)
@@ -536,11 +719,20 @@ def attribution(id: str, user=Depends(current_user), db: DBSession = Depends(get
 
 @app.get("/v1/market/symbols")
 def symbols(q: str = "", user=Depends(current_user)):
-    return [
+    from .services.universe import LISTED_EQUITIES
+
+    universe = {
+        **{s: (n, "US-listed equity") for s, n in LISTED_EQUITIES.items()},
+        **CATALOG,
+    }
+    matches = [
         {"ticker": s, "company_name": v[0], "theme_tag": v[1]}
-        for s, v in CATALOG.items()
+        for s, v in universe.items()
         if q.lower() in (s + " " + v[0]).lower()
     ]
+    return sorted(
+        matches, key=lambda item: (item["ticker"] != q.upper(), item["ticker"])
+    )[:100]
 
 
 @app.get("/v1/market/bars/{ticker}")
@@ -702,6 +894,38 @@ def order_status(
     ]
 
 
+@app.get("/v1/etfs/{id}/paper-orders")
+def bucket_paper_orders(
+    id: str, user=Depends(current_user), db: DBSession = Depends(get_db)
+):
+    """Return only broker activity that originated from this saved ETF bucket."""
+    owned(db, ETF, id, user)
+    previews = list(
+        db.scalars(
+            select(OrderPreview)
+            .where(OrderPreview.etf_id == id, OrderPreview.user_id == user)
+            .order_by(OrderPreview.created_at.desc())
+        )
+    )
+    preview_ids = [preview.id for preview in previews]
+    orders_by_preview: dict[str, list[dict]] = {preview_id: [] for preview_id in preview_ids}
+    if preview_ids:
+        for order in db.scalars(
+            select(Order).where(Order.preview_id.in_(preview_ids), Order.user_id == user)
+        ):
+            orders_by_preview[order.preview_id].append(order.payload)
+    return [
+        {
+            "id": preview.id,
+            "investment": preview.payload.get("investment"),
+            "created_at": preview.created_at.isoformat(),
+            "expires_at": preview.payload.get("expires_at"),
+            "orders": orders_by_preview[preview.id],
+        }
+        for preview in previews
+    ]
+
+
 @app.post("/v1/orders/{preview_id}/reconcile")
 def reconcile(
     preview_id: str, user=Depends(limited_user), db: DBSession = Depends(get_db)
@@ -716,6 +940,9 @@ def reconcile(
                 **order.payload,
                 "status": result["status"],
                 "external_order_id": result["id"],
+                "filled_qty": result.get("filled_qty"),
+                "filled_avg_price": result.get("filled_avg_price"),
+                "filled_at": result.get("filled_at"),
             }
             db.commit()
         except ValueError:
@@ -730,3 +957,23 @@ def get_diagnostics(
     from .services.analytics import diagnostics
 
     return diagnostics(artifact(db, id, user))
+
+
+# Research chat is a preview-only action; portfolio creation remains explicit.
+
+
+@app.post("/v1/research/chat")
+def research_chat(body: ResearchChatInput, user=Depends(limited_user)):
+    from .services.chat import respond
+    from .services.cache import get_json, key, set_json
+
+    # Cache only the research payload, not user/session data. A short TTL makes
+    # repeated edits and accidental resends responsive without treating research
+    # as permanent or current market information.
+    cache_key = key("research-chat:v1", body.model_dump(mode="json"))
+    cached = get_json(cache_key)
+    if cached is not None:
+        return {**cached, "cache_hit": True}
+    response = respond(body)
+    set_json(cache_key, response, ttl_seconds=900)
+    return {**response, "cache_hit": False}

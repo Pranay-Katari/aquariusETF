@@ -30,7 +30,7 @@ Alternatively, `docker compose up --build` starts the local demo with Redis and 
 - Explicit Generate Backtest queues persisted work and shows progress. Failed/canceled jobs remain in history. Restart-interrupted jobs are marked failed with a retry instruction.
 - NYSE session alignment, first-session close allocation, fractional total-return units, monthly/quarterly/no rebalancing, fees and slippage, SPY/QQQ comparison. Incomplete price histories fail rather than being silently filled.
 - NAV/normalized chart, daily range selection, full-period metrics, net holding contributions, current/average weights in artifacts, drawdown episodes, rolling 21-session returns and a rebalance ledger. Compare saved backtests and export the entire reproducible artifact as JSON.
-- Source-linked curated research without credentials. Optional OpenAI web-search research followed by structured extraction and deterministic validation. Every model-supplied URL must occur in actual tool search sources, symbols must pass provider validation, and code computes equal weights within the specified cap. Users still need to review whether evidence supports the rationale; citation presence alone cannot establish truth.
+- Source-linked curated research without credentials. Optional OpenRouter (Llama 3.3) or OpenAI web-search research followed by structured extraction and deterministic validation. Every model-supplied URL must occur in actual tool search sources, symbols must pass provider validation, and code computes the selected allocation method within the specified cap. Users still need to review whether evidence supports the rationale; citation presence alone cannot establish truth.
 - Persisted buy-only paper order preview, cent rounding, residual cash and server-side Alpaca paper adapter. Submission requires a fresh broker-validated preview, explicit confirmation, authenticated designated account owner and server-side enablement. Client order IDs and durable intents prevent duplicate submissions on retries; uncertain submissions are reconciled explicitly. There is no live-trading code path.
 - Configurable Redis cache-aside; Parquet history and result artifacts remain durable when Redis is flushed. Optional private Supabase Storage mirror can restore local objects after disk loss.
 
@@ -67,7 +67,9 @@ RLS is enabled on every application table. Authenticated users can read only the
 
 ## Enable AI research
 
-Set `RESEARCH_PROVIDER=openai`, `LLM_API_KEY`, and `LLM_MODEL` to a model available to your account that supports Responses, web search and structured outputs. No model or paid API is assumed automatically. The research flow performs two calls: primary-source discovery and schema-constrained extraction. It persists prompt, model, response IDs, tool calls, source metadata, token usage, validation and generated holdings. It never uses model-generated prices or performance.
+For OpenRouter, set `RESEARCH_PROVIDER=openrouter`, `LLM_MODEL=meta-llama/llama-3.3-70b-instruct`, and `LLM_API_KEY` in the backend `.env`. The key stays on the server. Research uses the OpenRouter web plugin (additional search charges apply), then structured extraction; provider failures are surfaced without substituting curated results. Market data remains synthetic unless separately configured.
+
+For OpenAI, set `RESEARCH_PROVIDER=openai`, `LLM_API_KEY`, and `LLM_MODEL` to a model available to your account that supports Responses, web search and structured outputs. No model or paid API is assumed automatically. The research flow performs two calls: primary-source discovery and schema-constrained extraction. It persists prompt, model, response IDs, tool calls, source metadata, token usage, validation and generated holdings. It never uses model-generated prices or performance.
 
 The curated mode supports AI infrastructure, semiconductors, clean energy, healthcare and technology. It rejects unsupported free-text constraints rather than pretending to apply them. Holding count and concentration limits are enforced. Fundamental screens and fully deterministic semantic exclusions need a dedicated point-in-time fundamentals/classification provider; they are not supported in this release.
 
@@ -111,3 +113,18 @@ Background jobs and request limiting are single-process MVP implementations. Run
 - [Alpha Vantage daily adjusted data](https://www.alphavantage.co/documentation/)
 - [OpenAI Responses web search](https://developers.openai.com/api/docs/guides/tools-web-search) and [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [Alpaca fractional trading](https://docs.alpaca.markets/us/docs/fractional-trading)
+
+## Theme research chat
+
+Open **Research lab** or **Research a theme** for the conversational workspace. Send a theme, optionally select a sector, then refine with messages such as “make it 5 holdings”, “focus on the technology sector”, or “remove NVDA”. Preferences control maximum holdings and weight. Proposals include company evidence and remain unsaved until **Open in portfolio editor** is clicked. The conversation remains available when the dialog is closed and reopened within the same workspace view; it is not persisted across page reloads.
+
+`POST /v1/research/chat` receives bounded user-message history and returns a proposal or clarification. Demo mode uses explicit catalog rules and explains unsupported requests. The optional AI research provider receives conversation context. Curated demo sector filters use explicit classifications. AI research searches the broader listing universe and evaluates sector fit from evidence; it does not claim externally verified sector classification. Sending a chat message never runs a backtest or submits an order.
+
+
+### Aquarius research conversation
+
+The AI first clarifies the theme, sector scope, holding count and allocation method. Both sides of the conversation are retained for follow-ups. Research supports a target of 2–50 stocks; unavailable evidence is reported instead of silently returning a smaller basket. The checked-in Nasdaq Trader equity listing snapshot contains 5,916 common-stock/ADR listings (retrieved September 14, 2026); it is a listing check, not a guarantee of current tradability. Sector fit is model-assessed and must be reviewed. Update `services/api/app/data/us_equities.json` periodically from the source URLs in that file. Synthetic simulations now accept listed equities outside the curated theme seeds; the prices are still artificial.
+
+Theme-relevance allocation uses squared model relevance scores, then deterministic capped normalization. It is not market-cap weighting or financial optimization. Equal weighting is also available. Chat commands such as `set NVDA to 15%` preserve the research and redistribute the remaining allocation within the cap. Proposal weights can be edited directly and normalized; saving requires 100% total within the chosen cap.
+
+The ocean front page uses React Bits Floating Lines with a static reduced-motion rendering and gradient fallback when WebGL is unavailable. The component license is included alongside its source.
