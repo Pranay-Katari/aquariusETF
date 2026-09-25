@@ -1,0 +1,9 @@
+# Keep the standard repository exclusions for Cloud Build uploads.
+#!include:.gitignore
+
+# The API imports this checked-in market universe at startup.
+!services/
+!services/api/
+!services/api/app/
+!services/api/app/data/
+!services/api/app/data/us_equities.json
