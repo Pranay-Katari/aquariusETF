@@ -76,6 +76,13 @@ class ResearchRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class ChatUsage(Base):
+    __tablename__ = "chat_usages"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class OrderPreview(Base):
     __tablename__ = "order_previews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     research_provider: str = "curated"
     llm_api_key: str = ""
     llm_model: str = ""
+    chat_request_limit: int = 10
+    chat_request_window_seconds: int = 86400
     paper_owner_user_id: str = ""
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""

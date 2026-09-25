@@ -19,6 +19,7 @@ from .db import (
     ETFHolding,
     Backtest,
     ResearchRun,
+    ChatUsage,
     OrderPreview,
     Order,
     Session,
@@ -963,9 +964,31 @@ def get_diagnostics(
 
 
 @app.post("/v1/research/chat")
-def research_chat(body: ResearchChatInput, user=Depends(limited_user)):
+def research_chat(
+    body: ResearchChatInput, user=Depends(limited_user), db: DBSession = Depends(get_db)
+):
     from .services.chat import respond
     from .services.cache import get_json, key, set_json
+
+    usage = db.scalar(
+        select(ChatUsage).where(ChatUsage.user_id == user).with_for_update()
+    )
+    current = now()
+    window = timedelta(seconds=settings.chat_request_window_seconds)
+    if usage is None:
+        usage = ChatUsage(user_id=user, window_started_at=current, request_count=0)
+        db.add(usage)
+    elif current - usage.window_started_at >= window:
+        usage.window_started_at = current
+        usage.request_count = 0
+    if usage.request_count >= settings.chat_request_limit:
+        reset_at = usage.window_started_at + window
+        raise HTTPException(
+            429,
+            f"Chat limit reached ({settings.chat_request_limit} requests). Try again after {reset_at.isoformat()}.",
+        )
+    usage.request_count += 1
+    db.commit()
 
     # Cache only the research payload, not user/session data. A short TTL makes
     # repeated edits and accidental resends responsive without treating research
