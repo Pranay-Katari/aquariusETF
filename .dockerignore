@@ -1,9 +1,10 @@
-.venv
-**/node_modules
-**/.next
-.env
-**/.env.local
-data
 .git
+.next
+.venv
+.env
+.env.local
 **/__pycache__
-tmp
+data
+dump.rdb
+node_modules
+apps/web/node_modules
