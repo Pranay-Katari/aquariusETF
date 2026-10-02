@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     paper_trading_enabled: bool = False
+    local_paper_trading_enabled: bool = False
+    free_run_limit: int = 10
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_id: str = ""
+    app_base_url: str = "http://127.0.0.1:3001"
+    admin_email: str = "pranaykatari001@gmail.com"
+    email_provider: str = ""
+    resend_api_key: str = ""
+    email_from: str = ""
+    report_recipient: str = ""
 
 
 settings = Settings()

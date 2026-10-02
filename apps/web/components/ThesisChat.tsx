@@ -26,7 +26,7 @@ export default function ThesisChat({ onCreate }: { onCreate: (proposal: Proposal
     const history = [...messages, { role: "user" as const, text: message }];
     setMessages(history); setText(""); setBusy(true); setError("");
     try {
-      const response = await api<ChatResponse>("/v1/research/chat", { method: "POST", body: JSON.stringify({ history, messages: [...userMessages, message], sector: "", max_holdings: 8, max_weight: 0.25, weighting: "theme" }) });
+      const response = await api<ChatResponse>("/v1/research/chat", { method: "POST", body: JSON.stringify({ history, messages: [...userMessages, message], current_proposal: proposal, sector: "", max_holdings: 8, max_weight: 0.25, weighting: "theme" }) });
       setMessages((current) => [...current, { role: "assistant", text: response.message }]);
       setProposal(response.proposal); setWarnings(response.warnings ?? []);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "The research assistant could not respond."); }

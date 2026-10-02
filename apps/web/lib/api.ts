@@ -2,6 +2,11 @@ import { createClient } from "@supabase/supabase-js";
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 export const supabase = url && key ? createClient(url, key) : null;
+const apiBase =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "127.0.0.1"
+    ? "http://127.0.0.1:8000"
+    : "/api");
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -9,7 +14,7 @@ export async function api<T>(
   const session = supabase
     ? (await supabase.auth.getSession()).data.session
     : null;
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",

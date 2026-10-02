@@ -4,13 +4,13 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select, delete, update
 from sqlalchemy.orm import Session as DBSession
 from .config import settings
@@ -41,14 +41,24 @@ from .schemas import (
     PaperInput,
 )
 from .auth import current_user, limited_user
-from .services.market import market, CATALOG, MarketError, sessions
+from .services.market import market, CATALOG, MarketError, instrument_metadata, sessions
 from .services.engine import simulate, canonical_hash
 from .services.research import generate
 from .services.broker import broker, size_orders
 from .services.storage import storage
+from .services.usage import finish_run, start_run, status as usage_status
+from .services.reports import tear_sheet
+from .services.email import EmailDeliveryError, send_backtest_report
 
 log = logging.getLogger("aquarius")
 logging.basicConfig(level=logging.INFO)
+
+
+def paper_trading_authorized(user: str) -> bool:
+    return settings.paper_trading_enabled and (
+        (settings.app_mode == "demo" and settings.local_paper_trading_enabled)
+        or (settings.app_mode != "demo" and user == settings.paper_owner_user_id)
+    )
 
 
 @asynccontextmanager
@@ -117,6 +127,26 @@ def health():
 @app.get("/v1/me")
 def me(user=Depends(current_user)):
     return {"id": user, "mode": settings.app_mode}
+
+
+@app.get("/v1/billing/status")
+def billing_status(user=Depends(current_user), db: DBSession = Depends(get_db)):
+    payload = usage_status(db, user)
+    db.commit()
+    return payload
+
+
+@app.post("/v1/billing/checkout")
+def billing_checkout(user=Depends(current_user), db: DBSession = Depends(get_db)):
+    if not settings.stripe_secret_key or not settings.stripe_price_id:
+        raise HTTPException(503, "Billing is not configured")
+    try:
+        import stripe
+        stripe.api_key = settings.stripe_secret_key
+        session = stripe.checkout.Session.create(mode="subscription", line_items=[{"price": settings.stripe_price_id, "quantity": 1}], client_reference_id=user, success_url=f"{settings.app_base_url}/dashboard?billing=success", cancel_url=f"{settings.app_base_url}/dashboard?billing=canceled", allow_promotion_codes=True)
+        return {"url": session.url}
+    except Exception as exc:
+        raise HTTPException(502, "Could not start checkout") from exc
 
 
 def owned(db, model, id, user):
@@ -442,6 +472,8 @@ def create_backtest(
     snapshot = holdings_for(db, etf.id)
     if not snapshot:
         raise HTTPException(422, "Add holdings before generating a backtest")
+    run_key = f"backtest:{uuid.uuid4()}"
+    start_run(db, user, "backtest", run_key)
     row = Backtest(
         user_id=user,
         etf_id=etf.id,
@@ -450,6 +482,7 @@ def create_backtest(
         snapshot=snapshot,
     )
     db.add(row)
+    finish_run(db, run_key, True)
     db.commit()
     tasks.add_task(run_backtest, row.id)
     return summary(row)
@@ -680,6 +713,35 @@ def get_artifact(id: str, user=Depends(current_user), db: DBSession = Depends(ge
     return artifact(db, id, user)
 
 
+@app.get("/v1/backtests/{id}/tear-sheet.pdf")
+def get_tear_sheet(id: str, user=Depends(current_user), db: DBSession = Depends(get_db)):
+    row = owned(db, Backtest, id, user)
+    data = artifact(db, id, user)
+    filename = "".join(c if c.isalnum() else "-" for c in row.etf_id) + "-tear-sheet.pdf"
+    return Response(tear_sheet(data["metadata"].get("name", "Aquarius Basket"), data), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.post("/v1/backtests/{id}/email-report")
+def email_backtest_report(id: str, user=Depends(current_user), db: DBSession = Depends(get_db)):
+    """Email a completed report to the configured, verified operations recipient."""
+    row = owned(db, Backtest, id, user)
+    data = artifact(db, id, user)
+    name = data["metadata"].get("name", "Aquarius Basket")
+    try:
+        provider_id = send_backtest_report(
+            api_key=settings.resend_api_key,
+            sender=settings.email_from,
+            recipient=settings.report_recipient or settings.admin_email,
+            name=name,
+            artifact=data,
+            pdf=tear_sheet(name, data),
+            idempotency_key=f"backtest-report/{id}/{row.checksum}",
+        )
+    except EmailDeliveryError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"status": "sent", "recipient": settings.report_recipient or settings.admin_email, "provider_id": provider_id}
+
+
 @app.get("/v1/backtests/{id}/series")
 def get_series(
     id: str,
@@ -774,7 +836,7 @@ def preview(
         raise HTTPException(422, "Investment is too small")
     checked = False
     if settings.paper_trading_enabled:
-        if settings.app_mode == "demo" or user != settings.paper_owner_user_id:
+        if not paper_trading_authorized(user):
             raise HTTPException(
                 403, "Paper trading requires the configured authenticated account owner"
             )
@@ -822,9 +884,7 @@ def submit_paper(
     body: PaperInput, user=Depends(limited_user), db: DBSession = Depends(get_db)
 ):
     if (
-        settings.app_mode == "demo"
-        or not settings.paper_trading_enabled
-        or user != settings.paper_owner_user_id
+        not paper_trading_authorized(user)
     ):
         raise HTTPException(
             403,
@@ -893,6 +953,14 @@ def order_status(
             select(Order).where(Order.preview_id == preview_id, Order.user_id == user)
         )
     ]
+
+
+@app.get("/v1/market/instruments/{ticker}")
+def instrument(ticker: str, user=Depends(current_user)):
+    symbol = ticker.upper()
+    if symbol not in CATALOG:
+        raise HTTPException(404, "Instrument not found")
+    return {"ticker": symbol, **instrument_metadata(symbol)}
 
 
 @app.get("/v1/etfs/{id}/paper-orders")
@@ -970,6 +1038,8 @@ def research_chat(
     from .services.chat import respond
     from .services.cache import get_json, key, set_json
 
+    run_key = f"copilot:{uuid.uuid4()}"
+    start_run(db, user, "copilot", run_key)
     usage = db.scalar(
         select(ChatUsage).where(ChatUsage.user_id == user).with_for_update()
     )
@@ -978,9 +1048,14 @@ def research_chat(
     if usage is None:
         usage = ChatUsage(user_id=user, window_started_at=current, request_count=0)
         db.add(usage)
-    elif current - usage.window_started_at >= window:
-        usage.window_started_at = current
-        usage.request_count = 0
+    else:
+        # SQLite can round-trip a timezone-aware timestamp as naive. Normalize
+        # legacy rows before comparing the request window after an API restart.
+        if usage.window_started_at.tzinfo is None:
+            usage.window_started_at = usage.window_started_at.replace(tzinfo=timezone.utc)
+        if current - usage.window_started_at >= window:
+            usage.window_started_at = current
+            usage.request_count = 0
     if usage.request_count >= settings.chat_request_limit:
         reset_at = usage.window_started_at + window
         raise HTTPException(
@@ -988,6 +1063,7 @@ def research_chat(
             f"Chat limit reached ({settings.chat_request_limit} requests). Try again after {reset_at.isoformat()}.",
         )
     usage.request_count += 1
+    finish_run(db, run_key, True)
     db.commit()
 
     # Cache only the research payload, not user/session data. A short TTL makes

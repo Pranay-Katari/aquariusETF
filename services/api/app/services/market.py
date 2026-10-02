@@ -196,6 +196,18 @@ def sessions(start: date, end: date):
     ]
 
 
+CRYPTO_ETFS = {"IBIT", "ETHA"}
+COMMODITY_FUNDS = {"GLD", "SLV", "DBC"}
+
+
+def instrument_metadata(ticker: str) -> dict:
+    if ticker in CRYPTO_ETFS:
+        return {"asset_class": "crypto", "instrument_type": "listed crypto trust", "warnings": ["Short-history listed crypto product. Weekend spot-market moves are not represented in the NYSE-session backtest."]}
+    if ticker in COMMODITY_FUNDS:
+        return {"asset_class": "commodity", "instrument_type": "listed commodity fund", "warnings": ["Fund returns can differ from spot commodity returns because of fees, futures rolls, and fund structure."]}
+    return {"asset_class": "equity", "instrument_type": "listed equity or ETF", "warnings": []}
+
+
 class MarketError(ValueError):
     pass
 

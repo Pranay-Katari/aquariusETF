@@ -83,6 +83,34 @@ class ChatUsage(Base):
     request_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class Usage(Base):
+    __tablename__ = "usage"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    runs_used: Mapped[int] = mapped_column(Integer, default=0)
+    runs_limit: Mapped[int] = mapped_column(Integer, default=10)
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    run_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="inactive")
+    price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OrderPreview(Base):
     __tablename__ = "order_previews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
