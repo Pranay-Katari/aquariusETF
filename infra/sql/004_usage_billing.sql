@@ -3,12 +3,6 @@
 
 begin;
 
-create table if not exists chat_usages (
-  user_id varchar(36) primary key,
-  window_started_at timestamp with time zone not null,
-  request_count integer not null default 0
-);
-
 create table if not exists usage (
   user_id varchar(36) primary key,
   period_start timestamp with time zone not null,
@@ -38,11 +32,10 @@ create table if not exists subscriptions (
 
 -- The application accesses these tables only through its privileged server
 -- connection; prevent direct browser access through Supabase's data API.
-alter table public.chat_usages enable row level security;
 alter table public.usage enable row level security;
 alter table public.usage_events enable row level security;
 alter table public.subscriptions enable row level security;
 
-revoke all on public.chat_usages, public.usage, public.usage_events, public.subscriptions from anon, authenticated;
+revoke all on public.usage, public.usage_events, public.subscriptions from anon, authenticated;
 
 commit;

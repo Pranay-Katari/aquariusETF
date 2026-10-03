@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     ForeignKey,
     DateTime,
+    Uuid,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -78,7 +79,10 @@ class ResearchRun(Base):
 
 class ChatUsage(Base):
     __tablename__ = "chat_usages"
-    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Supabase auth user IDs are UUIDs in PostgreSQL.  Using the native type
+    # avoids a UUID = varchar comparison failure on the production quota query
+    # while retaining string values at the application boundary.
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
     window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     request_count: Mapped[int] = mapped_column(Integer, default=0)
 
