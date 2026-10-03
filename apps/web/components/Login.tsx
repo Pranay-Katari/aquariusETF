@@ -1,18 +1,42 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, Chrome, Loader2, ShieldCheck } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/api";
 
 export default function Login() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const destination = useMemo(() => {
+    const next = searchParams.get("next");
+    return next && next.startsWith("/") && !next.startsWith("//")
+      ? next
+      : "/dashboard";
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    let mounted = true;
+    const continueToWorkspace = (session: unknown) => {
+      if (mounted && session) router.replace(destination);
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => continueToWorkspace(session));
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      continueToWorkspace(session);
+    });
+    return () => {
+      mounted = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, [destination, router]);
+
   async function signInWithGoogle() {
     if (!supabase) { setError("Supabase is not configured yet. Add the public Supabase URL and anon key to apps/web/.env.local."); return; }
     setBusy(true); setError("");
-    const { error: authError } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/dashboard` } });
+    const { error: authError } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}${destination}` } });
     if (authError) { setError(authError.message); setBusy(false); }
   }
   return <main className="login-page" style={{ width: "100%", margin: 0, minHeight: "100dvh" }}>

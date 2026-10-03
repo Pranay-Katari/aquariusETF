@@ -42,7 +42,9 @@ services/api/app/         FastAPI, configuration, auth, SQLAlchemy models, contr
 services/api/app/services/ market, engine, analytics, research, storage, paper adapter
 services/api/tests/        golden accounting, API ownership/versioning, cache, research tests
 infra/sql/001_initial.sql  Core PostgreSQL schema and read-only owner RLS policies
-infra/sql/002_usage_billing.sql Server-owned usage metering and subscription schema
+infra/sql/002_saved_container_config.sql Persisted backtest configuration
+infra/sql/003_chat_usage_quota.sql Per-user copilot rate-limit schema
+infra/sql/004_usage_billing.sql Server-owned backtest metering and subscription schema
 infra/docker/             API and standalone web images
 ```
 
@@ -56,7 +58,7 @@ Provider prices are split- and dividend-adjusted. Simulated quantities are total
 
 ## Supabase authentication, database and storage
 
-1. Create a Supabase project and run `infra/sql/001_initial.sql`, then `infra/sql/002_usage_billing.sql`, in order in the SQL editor.
+1. Create a Supabase project and run the `infra/sql/` migrations in numeric order in the SQL editor.
 2. Set `APP_MODE=production`, `DATABASE_URL=postgresql+psycopg://...?...sslmode=require`, `SUPABASE_URL` and `SUPABASE_ANON_KEY` on the API. `DATABASE_URL` is a server-only privileged connection. Never place it in public variables.
 3. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` on the frontend. Register/sign in through the app and configure email confirmation in Supabase. API requests validate the bearer token through Supabase Auth; ownership is checked on every resource access.
 4. To use object storage, create a **private** bucket and set `SUPABASE_STORAGE_BUCKET` and server-only `SUPABASE_SERVICE_ROLE_KEY`. Market objects are under `market/`; results under `artifacts/<user-id>/`. Otherwise provision a persistent mounted `DATA_DIR` and back it up.

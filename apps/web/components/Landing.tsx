@@ -2,9 +2,25 @@
 
 import { ArrowRight, ChevronRight } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { supabase } from "@/lib/api";
 
 export default function Landing() {
   const router = useRouter();
+
+  // Supabase can fall back to the configured site URL after OAuth.  If that
+  // URL is the landing page, continue an authenticated user into the studio
+  // instead of presenting a second sign-in button.
+  useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (active && session) router.replace("/dashboard");
+    });
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   return (
     <main
@@ -24,7 +40,7 @@ export default function Landing() {
           <button className="link-button" onClick={() => router.push("/dashboard")}>
             Explore
           </button>
-          <button className="start-button" onClick={() => router.push("/login")}>
+          <button className="start-button" onClick={() => router.push("/dashboard")}>
             Start building <ChevronRight size={16} />
           </button>
         </div>
@@ -43,7 +59,7 @@ export default function Landing() {
             and understand the risk in a few focused steps.
           </span>
           <div className="hero-actions">
-            <button className="primary" onClick={() => router.push("/login")}>
+            <button className="primary" onClick={() => router.push("/dashboard")}>
               Create a basket <ArrowRight size={17} />
             </button>
             <button className="secondary" onClick={() => router.push("/dashboard")}>
