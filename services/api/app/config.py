@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_storage_bucket: str = ""
+    gcs_artifact_bucket: str = ""
     # Yahoo's public chart feed supplies split- and dividend-adjusted close history
     # without requiring a separate retail API key. Synthetic data remains available
     # only as an explicit demo fallback.
