@@ -1,7 +1,13 @@
 """OpenRouter chat transport normalized for the shared research validator."""
 
+import logging
+import time
+
 import httpx
 from ..config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def call_openrouter(payload):
@@ -26,27 +32,44 @@ def call_openrouter(payload):
             "json_schema": {k: v for k, v in spec.items() if k != "type"},
         }
         body["provider"] = {"require_parameters": True}
-    try:
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-            json=body,
-            timeout=120,
-        )
+    # Provider rate limits and upstream 5xx errors are normally transient. Retry
+    # them here so the UI only shows an error after the provider is genuinely
+    # unavailable, rather than making a user manually resend the same prompt.
+    response = None
+    for attempt in range(3):
+        try:
+            response = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+                json=body,
+                timeout=120,
+            )
+        except httpx.RequestError as exc:
+            logger.warning("openrouter_transport_error attempt=%s error=%s", attempt + 1, type(exc).__name__)
+            if attempt < 2:
+                time.sleep(1 + attempt)
+                continue
+            raise ValueError("OpenRouter is temporarily unavailable. Please retry in a moment.") from exc
+
         if response.status_code == 402:
-            raise ValueError(
-                "OpenRouter has insufficient credits. Add credits to the configured account."
-            )
+            raise ValueError("OpenRouter has insufficient credits. Add credits to the configured account.")
         if response.status_code in (401, 403):
-            raise ValueError(
-                "OpenRouter rejected the API key or model access. Check the server credentials."
-            )
-        response.raise_for_status()
-        data = response.json()
-    except httpx.HTTPError as exc:
-        raise ValueError(
-            "OpenRouter unavailable. Check model access and rate limits, then retry."
-        ) from exc
+            raise ValueError("OpenRouter rejected the API key or model access. Check the server credentials.")
+        if response.status_code in (408, 429) or response.status_code >= 500:
+            logger.warning("openrouter_transient_response attempt=%s status=%s", attempt + 1, response.status_code)
+            if attempt < 2:
+                time.sleep(1 + attempt)
+                continue
+            raise ValueError("OpenRouter is temporarily unavailable due to provider load. Please retry in a moment.")
+        try:
+            response.raise_for_status()
+            data = response.json()
+            break
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("openrouter_request_rejected status=%s", response.status_code)
+            raise ValueError("OpenRouter rejected this request. Try a shorter or more specific theme.") from exc
+    else:  # pragma: no cover - loop always returns, retries, or raises.
+        raise ValueError("OpenRouter is temporarily unavailable. Please retry in a moment.")
     choices = data.get("choices") or []
     if not choices or choices[0].get("finish_reason") != "stop":
         raise ValueError(
