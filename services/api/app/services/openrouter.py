@@ -17,7 +17,10 @@ def call_openrouter(payload):
             {"role": "system", "content": payload["instructions"]},
             {"role": "user", "content": payload["input"]},
         ],
-        "max_tokens": 16000
+        # Web research and structured extraction do not need a 16k completion
+        # allowance.  Keeping this bounded improves provider routing coverage
+        # and prevents a short basket request from reserving an oversized output.
+        "max_tokens": 6000
         if payload.get("tools")
         or payload.get("text", {}).get("format", {}).get("name") == "thematic_portfolio"
         else 4096,
