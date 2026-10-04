@@ -1066,13 +1066,14 @@ def research_chat(
     finish_run(db, run_key, True)
     db.commit()
 
-    # Cache only the research payload, not user/session data. A short TTL makes
-    # repeated edits and accidental resends responsive without treating research
-    # as permanent or current market information.
-    cache_key = key("research-chat:v1", body.model_dump(mode="json"))
+    # Cache successful proposals only, never an upstream-provider failure or a
+    # clarification.  Versioning clears responses cached before a transient
+    # provider/database failure was repaired.
+    cache_key = key("research-chat:v2", body.model_dump(mode="json"))
     cached = get_json(cache_key)
     if cached is not None:
         return {**cached, "cache_hit": True}
     response = respond(body)
-    set_json(cache_key, response, ttl_seconds=900)
+    if response.get("proposal") is not None:
+        set_json(cache_key, response, ttl_seconds=900)
     return {**response, "cache_hit": False}
