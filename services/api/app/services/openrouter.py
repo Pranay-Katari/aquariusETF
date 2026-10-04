@@ -43,7 +43,9 @@ def call_openrouter(payload):
         try:
             response = httpx.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+                # Secret Manager environment values can retain a trailing newline.
+                # Strip whitespace before constructing an HTTP header.
+                headers={"Authorization": f"Bearer {settings.llm_api_key.strip()}"},
                 json=body,
                 timeout=120,
             )
