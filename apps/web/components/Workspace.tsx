@@ -2,58 +2,961 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { BarChart3, ChevronRight, FileDown, Loader2, Mail, Plus, Search, SlidersHorizontal, Trash2, X } from "lucide-react";
+import {
+  BarChart3,
+  ChevronRight,
+  FileDown,
+  Loader2,
+  Mail,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
 import { api, defaultConfig, money, pct } from "@/lib/api";
 import type { Backtest, Config, ETF, Holding, Series } from "@/lib/types";
 import PerformanceChart from "./PerformanceChart";
 import CopilotModal from "./CopilotModal";
 
-const blank = () => ({ name: "Untitled basket", symbol: "CUSTOM", description: "", holdings: [] as Holding[] });
-const ideas = ["AI infrastructure", "Bitcoin + miners", "Uranium", "Rate-cut winners"];
+const blank = () => ({
+  name: "Untitled basket",
+  symbol: "CUSTOM",
+  description: "",
+  holdings: [] as Holding[],
+});
+const ideas = [
+  "AI infrastructure",
+  "Bitcoin + miners",
+  "Uranium",
+  "Rate-cut winners",
+];
 const assetBaskets = {
-  crypto: { name: "Crypto listed trusts", description: "Listed crypto ETF basket with Bitcoin and Ether exposure", holdings: [{ ticker: "IBIT", company_name: "iShares Bitcoin Trust", theme_tag: "Crypto", target_weight: .6, rationale: "Bitcoin exposure through a listed trust", sources: [] }, { ticker: "ETHA", company_name: "iShares Ethereum Trust", theme_tag: "Crypto", target_weight: .4, rationale: "Ether exposure through a listed trust", sources: [] }] },
-  commodities: { name: "Commodities basket", description: "Listed commodity fund basket spanning gold, silver, and broad commodities", holdings: [{ ticker: "GLD", company_name: "SPDR Gold Shares", theme_tag: "Commodity", target_weight: .4, rationale: "Gold exposure", sources: [] }, { ticker: "SLV", company_name: "iShares Silver Trust", theme_tag: "Commodity", target_weight: .2, rationale: "Silver exposure", sources: [] }, { ticker: "DBC", company_name: "Invesco DB Commodity Index Tracking Fund", theme_tag: "Commodity", target_weight: .4, rationale: "Diversified commodity exposure", sources: [] }] },
+  crypto: {
+    name: "Crypto listed trusts",
+    description: "Listed crypto ETF basket with Bitcoin and Ether exposure",
+    holdings: [
+      {
+        ticker: "IBIT",
+        company_name: "iShares Bitcoin Trust",
+        theme_tag: "Crypto",
+        target_weight: 0.6,
+        rationale: "Bitcoin exposure through a listed trust",
+        sources: [],
+      },
+      {
+        ticker: "ETHA",
+        company_name: "iShares Ethereum Trust",
+        theme_tag: "Crypto",
+        target_weight: 0.4,
+        rationale: "Ether exposure through a listed trust",
+        sources: [],
+      },
+    ],
+  },
+  commodities: {
+    name: "Commodities basket",
+    description:
+      "Listed commodity fund basket spanning gold, silver, and broad commodities",
+    holdings: [
+      {
+        ticker: "GLD",
+        company_name: "SPDR Gold Shares",
+        theme_tag: "Commodity",
+        target_weight: 0.4,
+        rationale: "Gold exposure",
+        sources: [],
+      },
+      {
+        ticker: "SLV",
+        company_name: "iShares Silver Trust",
+        theme_tag: "Commodity",
+        target_weight: 0.2,
+        rationale: "Silver exposure",
+        sources: [],
+      },
+      {
+        ticker: "DBC",
+        company_name: "Invesco DB Commodity Index Tracking Fund",
+        theme_tag: "Commodity",
+        target_weight: 0.4,
+        rationale: "Diversified commodity exposure",
+        sources: [],
+      },
+    ],
+  },
 };
 
 export default function Workspace() {
-  const router = useRouter(), pathname = usePathname();
-  const [portfolios, setPortfolios] = useState<ETF[]>([]), [selected, setSelected] = useState<ETF | null>(null), [draft, setDraft] = useState(blank), [config, setConfig] = useState<Config>(defaultConfig), [result, setResult] = useState<Backtest | null>(null), [series, setSeries] = useState<Series | null>(null), [query, setQuery] = useState(""), [matches, setMatches] = useState<{ticker:string;company_name:string;theme_tag:string}[]>([]), [busy, setBusy] = useState(""), [error, setError] = useState(""), [chatOpen, setChatOpen] = useState(false), [basketType, setBasketType] = useState<"equities"|"crypto"|"commodities">("equities");
+  const router = useRouter(),
+    pathname = usePathname();
+  const [portfolios, setPortfolios] = useState<ETF[]>([]),
+    [selected, setSelected] = useState<ETF | null>(null),
+    [draft, setDraft] = useState(blank),
+    [config, setConfig] = useState<Config>(defaultConfig),
+    [result, setResult] = useState<Backtest | null>(null),
+    [series, setSeries] = useState<Series | null>(null),
+    [query, setQuery] = useState(""),
+    [matches, setMatches] = useState<
+      { ticker: string; company_name: string; theme_tag: string }[]
+    >([]),
+    [busy, setBusy] = useState(""),
+    [error, setError] = useState(""),
+    [chatOpen, setChatOpen] = useState(false),
+    [basketType, setBasketType] = useState<
+      "equities" | "crypto" | "commodities"
+    >("equities");
   const dashboard = pathname === "/" || pathname === "/dashboard";
-  const total = useMemo(() => draft.holdings.reduce((n, holding) => n + holding.target_weight, 0), [draft.holdings]);
-  const valid = draft.holdings.length > 0 && Math.abs(total - 1) < .0001;
+  const total = useMemo(
+    () => draft.holdings.reduce((n, holding) => n + holding.target_weight, 0),
+    [draft.holdings],
+  );
+  const valid = draft.holdings.length > 0 && Math.abs(total - 1) < 0.0001;
   const active = result?.status === "queued" || result?.status === "running";
   const metrics = result?.metrics ?? {};
-  const score = Math.min(99, Math.max(0, Math.round(52 + (metrics.sharpe_ratio ?? 0) * 20 + Math.max(-.2, metrics.max_drawdown ?? -.3) * 100)));
-  const load = useCallback(async () => { const list = await api<ETF[]>("/v1/etfs"); setPortfolios(list); return list; }, []);
-  const open = useCallback(async (etf: ETF) => { setSelected(etf); setDraft({name:etf.name,symbol:etf.symbol,description:etf.description,holdings:etf.holdings}); const history = await api<Backtest[]>(`/v1/etfs/${etf.id}/backtests`); setResult(history[0] ?? null); if (history[0]) setConfig(history[0].config); }, []);
-  useEffect(() => { let canceled=false; load().then(async list => { if(canceled)return; const id=pathname.split("/")[2]; if(id==="new"){setSelected(null);setDraft(blank());setResult(null);return;} const match=id?list.find(item=>item.id===id):list[0]; if(match&&!dashboard) await open(match); }).catch(e=>setError(e.message)); return()=>{canceled=true;}; },[pathname,dashboard,load,open]);
-  useEffect(() => { if(!result||!active)return; const poll=window.setInterval(()=>api<Backtest>(`/v1/backtests/${result.id}`).then(setResult).catch(e=>setError(e.message)),900); return()=>window.clearInterval(poll); },[result,active]);
-  useEffect(() => { if(result?.status!=="completed"){setSeries(null);return;} api<Series>(`/v1/backtests/${result.id}/series?range=5Y`).then(setSeries).catch(e=>setError(e.message)); },[result?.id,result?.status]);
-  useEffect(() => { if(!query.trim()){setMatches([]);return;} const timer=window.setTimeout(()=>api<typeof matches>(`/v1/market/symbols?q=${encodeURIComponent(query)}`).then(setMatches).catch(e=>setError(e.message)),180); return()=>window.clearTimeout(timer); },[query]);
-  useEffect(() => { const openCopilot=()=>setChatOpen(true);window.addEventListener("aquarius:open-copilot",openCopilot);return()=>window.removeEventListener("aquarius:open-copilot",openCopilot); },[]);
-  async function save(){ if(!valid)throw new Error("Add holdings and make the total weight 100%."); const etf=selected?await api<ETF>(`/v1/etfs/${selected.id}`,{method:"PATCH",body:JSON.stringify({...draft,expected_version:selected.version})}):await api<ETF>("/v1/etfs",{method:"POST",body:JSON.stringify(draft)});setSelected(etf);setDraft({name:etf.name,symbol:etf.symbol,description:etf.description,holdings:etf.holdings});await load();return etf; }
-  async function backtest(){setBusy("run");setError("");try{const etf=await save();setResult(await api<Backtest>("/v1/backtests",{method:"POST",body:JSON.stringify({...config,etf_id:etf.id,portfolio_version:etf.version})}));window.dispatchEvent(new Event("aquarius:free-run"));}catch(e){setError(e instanceof Error?e.message:"Backtest could not start.");}finally{setBusy("");}}
-  async function saveOnly(){setBusy("save");setError("");try{const etf=await save();router.replace(`/etf/${etf.id}`);}catch(e){setError(e instanceof Error?e.message:"Basket could not be saved.");}finally{setBusy("");}}
-  async function buildFromThesis(){if(draft.description.trim().length<8){setError("Describe an investment thesis in at least 8 characters before building a basket.");return;}setBusy("build");setError("");try{const response=await api<{etf:ETF}>("/v1/etfs/generate",{method:"POST",body:JSON.stringify({prompt:draft.description,weighting:"theme",max_holdings:8,max_weight:.25})});setSelected(response.etf);setDraft({name:response.etf.name,symbol:response.etf.symbol,description:response.etf.description,holdings:response.etf.holdings});await load();router.replace(`/etf/${response.etf.id}`);}catch(e){setError(e instanceof Error?e.message:"The basket could not be built from this thesis.");}finally{setBusy("");}}
-  async function applyCopilot(proposal:{name:string;description:string;symbol?:string;holdings:Holding[]}){setSelected(null);setResult(null);setDraft({name:proposal.name,symbol:proposal.symbol??"CUSTOM",description:proposal.description,holdings:proposal.holdings});setChatOpen(false);}
-  async function optimizeWeights(){setBusy("optimize");setError("");try{const etf=await save();const optimized=await api<{holdings:Holding[];warning:string}>(`/v1/etfs/${etf.id}/optimize`,{method:"POST",body:JSON.stringify({...config,portfolio_version:etf.version})});setSelected(etf);setDraft(current=>({...current,holdings:optimized.holdings}));setError(optimized.warning);}catch(e){setError(e instanceof Error?e.message:"Weights could not be optimized.");}finally{setBusy("");}}
-  async function emailReport(){if(!result?.id)return;setBusy("email");setError("");try{const response=await api<{recipient:string}>(`/v1/backtests/${result.id}/email-report`,{method:"POST"});setError(`Report sent to ${response.recipient}.`);}catch(e){setError(e instanceof Error?e.message:"Report email could not be sent.");}finally{setBusy("");}}
-  function chooseBasket(type:"equities"|"crypto"|"commodities"){setBasketType(type);if(type==="equities")return;const preset=assetBaskets[type];setSelected(null);setResult(null);if(type==="crypto"&&config.start_date<"2024-08-01")setConfig(current=>({...current,start_date:"2024-08-01"}));setDraft({name:preset.name,symbol:"CUSTOM",description:preset.description,holdings:preset.holdings.map(holding=>({...holding}))});}
-  function add(item:(typeof matches)[number]){if(draft.holdings.some(h=>h.ticker===item.ticker))return;setDraft(current=>({...current,holdings:[...current.holdings,{...item,target_weight:0,rationale:"",sources:[]}]}));setQuery("");}
-  function normalize(){setDraft(current=>{const existing=current.holdings.reduce((n,h)=>n+h.target_weight,0);return {...current,holdings:current.holdings.map(h=>({...h,target_weight:existing?h.target_weight/existing:1/current.holdings.length}))};});}
-  if(dashboard) return <AppShell portfolios={portfolios} onNew={()=>router.push("/etf/new")}><section className="home-gradient"><div className="orb orb-one"/><div className="orb orb-two"/><div className="signal signal-a"/><div className="signal signal-b"/><div className="home-content"><p className="home-mark">AQUARIUS BASKETS</p><h1>Invest in the<br/><em>ideas</em> ahead.</h1><p className="home-copy">Turn a market thesis into a transparent basket. Build it, test it, and understand its risk before you commit.</p><div className="home-actions"><button className="home-cta" onClick={()=>router.push("/etf/new")}>Build a basket <ChevronRight size={18}/></button><button className="home-link" onClick={()=>document.getElementById("saved-baskets")?.scrollIntoView({behavior:"smooth"})}>View saved baskets</button></div></div><div className="motion-stack" aria-hidden="true"><div className="motion-card card-top"><span>THESIS</span><strong>AI power demand</strong><i/></div><div className="motion-card card-middle"><span>BACKTEST</span><strong>+18.4% CAGR</strong><b>vs SPY</b></div><div className="motion-card card-bottom"><span>RISK SIGNAL</span><strong>Balanced</strong><div><i/><i/><i/></div></div></div></section><section className="home-saved" id="saved-baskets"><div><p className="home-mark">YOUR WORKSPACE</p><h2>Saved baskets</h2></div><button onClick={()=>router.push("/etf/new")}><Plus size={16}/> New basket</button></section><div className="basket-list home-basket-list">{portfolios.map(p=><button key={p.id} onClick={()=>router.push(`/etf/${p.id}`)}><span><b>{p.name}</b><small>{p.holdings.length} holdings · {p.symbol}</small></span><ChevronRight size={17}/></button>)}{!portfolios.length&&<div className="home-empty">Your first basket starts with a single thesis.</div>}</div></AppShell>;
-  return <AppShell portfolios={portfolios} onNew={()=>router.push("/etf/new")}>
-    {error&&<div className="error-banner">{error}<button onClick={()=>setError("")}><X size={15}/></button></div>}<CopilotModal open={chatOpen} onClose={()=>setChatOpen(false)} onApply={applyCopilot}/>
-    <div className="reference-grid">
-      <div className="builder-column">
-        <section className="ref-card thesis-card"><div className="eyeline">01 · THESIS</div><h1>What do you believe will happen?</h1><div className="idea-row" aria-label="Basket type">{(["equities","crypto","commodities"] as const).map(type=><button key={type} onClick={()=>chooseBasket(type)} style={basketType===type?{borderColor:"var(--teal)",color:"var(--teal)"}:undefined}>{type[0].toUpperCase()+type.slice(1)}</button>)}</div><div className="thesis-input"><input aria-label="Portfolio thesis" value={draft.description} placeholder="Describe your investment thesis" onChange={e=>setDraft({...draft,description:e.target.value})}/><button className="gradient-button" onClick={buildFromThesis} disabled={busy==="build"}>{busy==="build"?<Loader2 className="spin" size={16}/>:null}{busy==="build"?"Building…":"Build basket"}</button></div><div className="idea-row">{ideas.map(idea=><button key={idea} onClick={()=>{setBasketType("equities");setDraft({...draft,description:idea});}}>{idea}</button>)}<button onClick={()=>setChatOpen(true)}>Ask AI Copilot</button></div></section>
-        <section className="ref-card holdings-card"><div className="section-row"><div className="eyeline">02 · HOLDINGS</div><strong className={valid?"teal":"warning"}>{(total*100).toFixed(0)}%</strong></div><div className="search-box"><Search size={16}/><input aria-label="Search ticker" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search ticker or company"/></div>{matches.length>0&&<div className="result-menu">{matches.slice(0,5).map(item=><button key={item.ticker} onClick={()=>add(item)}><b>{item.ticker}</b><span>{item.company_name}</span><Plus size={14}/></button>)}</div>}<div className="holding-lines">{draft.holdings.map((holding,index)=><div className="holding-line" key={holding.ticker}><strong>{holding.ticker}</strong><div className="weight-track"><i style={{width:`${Math.min(100,holding.target_weight*100)}%`}}/></div><span className="type-pill">{holding.theme_tag||"ETF"}</span><label><input aria-label={`${holding.ticker} weight`} type="number" value={(holding.target_weight*100).toFixed(1)} min="0" max="100" step=".1" onChange={e=>setDraft({...draft,holdings:draft.holdings.map((h,i)=>i===index?{...h,target_weight:Number(e.target.value)/100}:h)})}/>%</label><button className="icon-action" aria-label={`Remove ${holding.ticker}`} onClick={()=>setDraft({...draft,holdings:draft.holdings.filter((_,i)=>i!==index)})}><Trash2 size={14}/></button></div>)}</div>{!draft.holdings.length&&<p className="empty-copy">Search and add holdings to start this basket.</p>}<div className="holding-actions"><button onClick={normalize} disabled={!draft.holdings.length}>Normalize weights</button><button onClick={optimizeWeights} title="Maximizes historical ending value for this exact backtest window. Review before using." disabled={!valid||!!busy}>{busy==="optimize"?<Loader2 className="spin" size={16}/>:<SlidersHorizontal size={16}/>} Optimize window</button><button onClick={saveOnly} disabled={!valid||!!busy}>{busy==="save"?<Loader2 className="spin" size={16}/>:null} Save basket</button><button className="run-button" onClick={backtest} disabled={!valid||!!busy||active}>{active||busy==="run"?<Loader2 className="spin" size={16}/>:<BarChart3 size={16}/>}{active?"Running backtest":"Run backtest"}</button></div></section>
-        <section className="ref-card compact-settings"><div className="eyeline">BACKTEST SETUP</div><label>Benchmark<select value={config.benchmark} onChange={e=>setConfig({...config,benchmark:e.target.value as Config["benchmark"]})}><option value="SPY">SPY · S&amp;P 500</option><option value="QQQ">QQQ · Nasdaq 100</option></select></label><label>Start date<input type="date" value={config.start_date} onChange={e=>setConfig({...config,start_date:e.target.value})}/></label><label>End date<input type="date" value={config.end_date} onChange={e=>setConfig({...config,end_date:e.target.value})}/></label><label>Rebalance<select value={config.rebalance_frequency} onChange={e=>setConfig({...config,rebalance_frequency:e.target.value as Config["rebalance_frequency"]})}><option value="none">Hold</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></label><label>Starting capital<input type="number" min="100" value={config.initial_capital} onChange={e=>setConfig({...config,initial_capital:Number(e.target.value)})}/></label><label>Transaction cost (bps)<input type="number" min="0" value={config.commission_bps} onChange={e=>setConfig({...config,commission_bps:Number(e.target.value)})}/></label><label>Slippage (bps)<input type="number" min="0" value={config.slippage_bps} onChange={e=>setConfig({...config,slippage_bps:Number(e.target.value)})}/></label></section>
+  const score = Math.min(
+    99,
+    Math.max(
+      0,
+      Math.round(
+        52 +
+          (metrics.sharpe_ratio ?? 0) * 20 +
+          Math.max(-0.2, metrics.max_drawdown ?? -0.3) * 100,
+      ),
+    ),
+  );
+  const load = useCallback(async () => {
+    const list = await api<ETF[]>("/v1/etfs");
+    setPortfolios(list);
+    return list;
+  }, []);
+  const open = useCallback(async (etf: ETF) => {
+    setSelected(etf);
+    setDraft({
+      name: etf.name,
+      symbol: etf.symbol,
+      description: etf.description,
+      holdings: etf.holdings,
+    });
+    const history = await api<Backtest[]>(`/v1/etfs/${etf.id}/backtests`);
+    setResult(history[0] ?? null);
+    if (history[0]) setConfig(history[0].config);
+  }, []);
+  useEffect(() => {
+    let canceled = false;
+    load()
+      .then(async (list) => {
+        if (canceled) return;
+        const id = pathname.split("/")[2];
+        if (id === "new") {
+          setSelected(null);
+          setDraft(blank());
+          setResult(null);
+          return;
+        }
+        const match = id ? list.find((item) => item.id === id) : list[0];
+        if (match && !dashboard) await open(match);
+      })
+      .catch((e) => setError(e.message));
+    return () => {
+      canceled = true;
+    };
+  }, [pathname, dashboard, load, open]);
+  useEffect(() => {
+    if (!result || !active) return;
+    const poll = window.setInterval(
+      () =>
+        api<Backtest>(`/v1/backtests/${result.id}`)
+          .then(setResult)
+          .catch((e) => setError(e.message)),
+      900,
+    );
+    return () => window.clearInterval(poll);
+  }, [result, active]);
+  useEffect(() => {
+    if (result?.status !== "completed") {
+      setSeries(null);
+      return;
+    }
+    api<Series>(`/v1/backtests/${result.id}/series?range=5Y`)
+      .then(setSeries)
+      .catch((e) => setError(e.message));
+  }, [result?.id, result?.status]);
+  useEffect(() => {
+    if (!query.trim()) {
+      setMatches([]);
+      return;
+    }
+    const timer = window.setTimeout(
+      () =>
+        api<typeof matches>(`/v1/market/symbols?q=${encodeURIComponent(query)}`)
+          .then(setMatches)
+          .catch((e) => setError(e.message)),
+      180,
+    );
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    const openCopilot = () => setChatOpen(true);
+    window.addEventListener("aquarius:open-copilot", openCopilot);
+    return () =>
+      window.removeEventListener("aquarius:open-copilot", openCopilot);
+  }, []);
+  async function save() {
+    if (!valid) throw new Error("Add holdings and make the total weight 100%.");
+    const etf = selected
+      ? await api<ETF>(`/v1/etfs/${selected.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            ...draft,
+            expected_version: selected.version,
+          }),
+        })
+      : await api<ETF>("/v1/etfs", {
+          method: "POST",
+          body: JSON.stringify(draft),
+        });
+    setSelected(etf);
+    setDraft({
+      name: etf.name,
+      symbol: etf.symbol,
+      description: etf.description,
+      holdings: etf.holdings,
+    });
+    await load();
+    return etf;
+  }
+  async function backtest() {
+    setBusy("run");
+    setError("");
+    try {
+      const etf = await save();
+      setResult(
+        await api<Backtest>("/v1/backtests", {
+          method: "POST",
+          body: JSON.stringify({
+            ...config,
+            etf_id: etf.id,
+            portfolio_version: etf.version,
+          }),
+        }),
+      );
+      window.dispatchEvent(new Event("aquarius:free-run"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Backtest could not start.");
+    } finally {
+      setBusy("");
+    }
+  }
+  async function saveOnly() {
+    setBusy("save");
+    setError("");
+    try {
+      const etf = await save();
+      router.replace(`/etf/${etf.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Basket could not be saved.");
+    } finally {
+      setBusy("");
+    }
+  }
+  async function buildFromThesis() {
+    if (draft.description.trim().length < 8) {
+      setError(
+        "Describe an investment thesis in at least 8 characters before building a basket.",
+      );
+      return;
+    }
+    setBusy("build");
+    setError("");
+    try {
+      const response = await api<{ etf: ETF }>("/v1/etfs/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: draft.description,
+          weighting: "theme",
+          max_holdings: 8,
+          max_weight: 0.25,
+        }),
+      });
+      setSelected(response.etf);
+      setDraft({
+        name: response.etf.name,
+        symbol: response.etf.symbol,
+        description: response.etf.description,
+        holdings: response.etf.holdings,
+      });
+      await load();
+      router.replace(`/etf/${response.etf.id}`);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "The basket could not be built from this thesis.",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+  async function applyCopilot(proposal: {
+    name: string;
+    description: string;
+    symbol?: string;
+    holdings: Holding[];
+  }) {
+    setSelected(null);
+    setResult(null);
+    setDraft({
+      name: proposal.name,
+      symbol: proposal.symbol ?? "CUSTOM",
+      description: proposal.description,
+      holdings: proposal.holdings,
+    });
+    setChatOpen(false);
+    router.push("/etf/new");
+  }
+  async function optimizeWeights() {
+    setBusy("optimize");
+    setError("");
+    try {
+      const etf = await save();
+      const optimized = await api<{ holdings: Holding[]; warning: string }>(
+        `/v1/etfs/${etf.id}/optimize`,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...config, portfolio_version: etf.version }),
+        },
+      );
+      setSelected(etf);
+      setDraft((current) => ({ ...current, holdings: optimized.holdings }));
+      setError(optimized.warning);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Weights could not be optimized.",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+  async function emailReport() {
+    if (!result?.id) return;
+    setBusy("email");
+    setError("");
+    try {
+      const response = await api<{ recipient: string }>(
+        `/v1/backtests/${result.id}/email-report`,
+        { method: "POST" },
+      );
+      setError(`Report sent to ${response.recipient}.`);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Report email could not be sent.",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+  function chooseBasket(type: "equities" | "crypto" | "commodities") {
+    setBasketType(type);
+    if (type === "equities") return;
+    const preset = assetBaskets[type];
+    setSelected(null);
+    setResult(null);
+    if (type === "crypto" && config.start_date < "2024-08-01")
+      setConfig((current) => ({ ...current, start_date: "2024-08-01" }));
+    setDraft({
+      name: preset.name,
+      symbol: "CUSTOM",
+      description: preset.description,
+      holdings: preset.holdings.map((holding) => ({ ...holding })),
+    });
+  }
+  function add(item: (typeof matches)[number]) {
+    if (draft.holdings.some((h) => h.ticker === item.ticker)) return;
+    setDraft((current) => ({
+      ...current,
+      holdings: [
+        ...current.holdings,
+        { ...item, target_weight: 0, rationale: "", sources: [] },
+      ],
+    }));
+    setQuery("");
+  }
+  function normalize() {
+    setDraft((current) => {
+      const existing = current.holdings.reduce(
+        (n, h) => n + h.target_weight,
+        0,
+      );
+      return {
+        ...current,
+        holdings: current.holdings.map((h) => ({
+          ...h,
+          target_weight: existing
+            ? h.target_weight / existing
+            : 1 / current.holdings.length,
+        })),
+      };
+    });
+  }
+  if (dashboard)
+    return (
+      <AppShell portfolios={portfolios} onNew={() => router.push("/etf/new")}>
+        <CopilotModal open={chatOpen} onClose={() => setChatOpen(false)} onApply={applyCopilot} />
+        <section className="home-gradient">
+          <div className="orb orb-one" />
+          <div className="orb orb-two" />
+          <div className="signal signal-a" />
+          <div className="signal signal-b" />
+          <div className="home-content">
+            <p className="home-mark">AQUARIUS BASKETS</p>
+            <h1>
+              Invest in the
+              <br />
+              <em>ideas</em> ahead.
+            </h1>
+            <p className="home-copy">
+              Turn a market thesis into a transparent basket. Build it, test it,
+              and understand its risk before you commit.
+            </p>
+            <div className="home-actions">
+              <button
+                className="home-cta"
+                onClick={() => router.push("/etf/new")}
+              >
+                Build a basket <ChevronRight size={18} />
+              </button>
+              <button
+                className="home-link"
+                onClick={() =>
+                  document
+                    .getElementById("saved-baskets")
+                    ?.scrollIntoView({ behavior: "smooth" })
+                }
+              >
+                View saved baskets
+              </button>
+            </div>
+          </div>
+          <div className="motion-stack" aria-hidden="true">
+            <div className="motion-card card-top">
+              <span>THESIS</span>
+              <strong>AI power demand</strong>
+              <i />
+            </div>
+            <div className="motion-card card-middle">
+              <span>BACKTEST</span>
+              <strong>+18.4% CAGR</strong>
+              <b>vs SPY</b>
+            </div>
+            <div className="motion-card card-bottom">
+              <span>RISK SIGNAL</span>
+              <strong>Balanced</strong>
+              <div>
+                <i />
+                <i />
+                <i />
+              </div>
+            </div>
+          </div>
+        </section>
+        <section className="home-saved" id="saved-baskets">
+          <div>
+            <p className="home-mark">YOUR WORKSPACE</p>
+            <h2>Saved baskets</h2>
+          </div>
+          <button onClick={() => router.push("/etf/new")}>
+            <Plus size={16} /> New basket
+          </button>
+        </section>
+        <div className="basket-list home-basket-list">
+          {portfolios.map((p) => (
+            <button key={p.id} onClick={() => router.push(`/etf/${p.id}`)}>
+              <span>
+                <b>{p.name}</b>
+                <small>
+                  {p.holdings.length} holdings · {p.symbol}
+                </small>
+              </span>
+              <ChevronRight size={17} />
+            </button>
+          ))}
+          {!portfolios.length && (
+            <div className="home-empty">
+              Your first basket starts with a single thesis.
+            </div>
+          )}
+        </div>
+      </AppShell>
+    );
+  return (
+    <AppShell portfolios={portfolios} onNew={() => router.push("/etf/new")}>
+      {error && (
+        <div className="error-banner">
+          {error}
+          <button onClick={() => setError("")}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      <CopilotModal
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        onApply={applyCopilot}
+      />
+      <div className="reference-grid">
+        <div className="builder-column">
+          <section className="ref-card thesis-card">
+            <div className="eyeline">01 · THESIS</div>
+            <h1>What do you believe will happen?</h1>
+            <div className="idea-row" aria-label="Basket type">
+              {(["equities", "crypto", "commodities"] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => chooseBasket(type)}
+                  style={
+                    basketType === type
+                      ? { borderColor: "var(--teal)", color: "var(--teal)" }
+                      : undefined
+                  }
+                >
+                  {type[0].toUpperCase() + type.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="thesis-input">
+              <input
+                aria-label="Portfolio thesis"
+                value={draft.description}
+                placeholder="Describe your investment thesis"
+                onChange={(e) =>
+                  setDraft({ ...draft, description: e.target.value })
+                }
+              />
+              <button
+                className="gradient-button"
+                onClick={buildFromThesis}
+                disabled={busy === "build"}
+              >
+                {busy === "build" ? (
+                  <Loader2 className="spin" size={16} />
+                ) : null}
+                {busy === "build" ? "Building…" : "Build basket"}
+              </button>
+            </div>
+            <div className="idea-row">
+              {ideas.map((idea) => (
+                <button
+                  key={idea}
+                  onClick={() => {
+                    setBasketType("equities");
+                    setDraft({ ...draft, description: idea });
+                  }}
+                >
+                  {idea}
+                </button>
+              ))}
+              <button onClick={() => setChatOpen(true)}>Ask AI Copilot</button>
+            </div>
+          </section>
+          <section className="ref-card holdings-card">
+            <div className="section-row">
+              <div className="eyeline">02 · HOLDINGS</div>
+              <strong className={valid ? "teal" : "warning"}>
+                {(total * 100).toFixed(0)}%
+              </strong>
+            </div>
+            <div className="search-box">
+              <Search size={16} />
+              <input
+                aria-label="Search ticker"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search ticker or company"
+              />
+            </div>
+            {matches.length > 0 && (
+              <div className="result-menu">
+                {matches.slice(0, 5).map((item) => (
+                  <button key={item.ticker} onClick={() => add(item)}>
+                    <b>{item.ticker}</b>
+                    <span>{item.company_name}</span>
+                    <Plus size={14} />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="holding-lines">
+              {draft.holdings.map((holding, index) => (
+                <div className="holding-line" key={holding.ticker}>
+                  <strong>{holding.ticker}</strong>
+                  <div className="weight-track">
+                    <i
+                      style={{
+                        width: `${Math.min(100, holding.target_weight * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="type-pill">
+                    {holding.theme_tag || "ETF"}
+                  </span>
+                  <label>
+                    <input
+                      aria-label={`${holding.ticker} weight`}
+                      type="number"
+                      value={(holding.target_weight * 100).toFixed(1)}
+                      min="0"
+                      max="100"
+                      step=".1"
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          holdings: draft.holdings.map((h, i) =>
+                            i === index
+                              ? {
+                                  ...h,
+                                  target_weight: Number(e.target.value) / 100,
+                                }
+                              : h,
+                          ),
+                        })
+                      }
+                    />
+                    %
+                  </label>
+                  <button
+                    className="icon-action"
+                    aria-label={`Remove ${holding.ticker}`}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        holdings: draft.holdings.filter((_, i) => i !== index),
+                      })
+                    }
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {!draft.holdings.length && (
+              <p className="empty-copy">
+                Search and add holdings to start this basket.
+              </p>
+            )}
+            <div className="holding-actions">
+              <button onClick={normalize} disabled={!draft.holdings.length}>
+                Normalize weights
+              </button>
+              <button
+                onClick={optimizeWeights}
+                title="Maximizes historical ending value for this exact backtest window. Review before using."
+                disabled={!valid || !!busy}
+              >
+                {busy === "optimize" ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <SlidersHorizontal size={16} />
+                )}{" "}
+                Optimize window
+              </button>
+              <button onClick={saveOnly} disabled={!valid || !!busy}>
+                {busy === "save" ? (
+                  <Loader2 className="spin" size={16} />
+                ) : null}{" "}
+                Save basket
+              </button>
+              <button
+                className="run-button"
+                onClick={backtest}
+                disabled={!valid || !!busy || active}
+              >
+                {active || busy === "run" ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <BarChart3 size={16} />
+                )}
+                {active ? "Running backtest" : "Run backtest"}
+              </button>
+            </div>
+          </section>
+          <section className="ref-card compact-settings">
+            <div className="eyeline">BACKTEST SETUP</div>
+            <label>
+              Benchmark
+              <select
+                value={config.benchmark}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    benchmark: e.target.value as Config["benchmark"],
+                  })
+                }
+              >
+                <option value="SPY">SPY · S&amp;P 500</option>
+                <option value="QQQ">QQQ · Nasdaq 100</option>
+              </select>
+            </label>
+            <label>
+              Start date
+              <input
+                type="date"
+                value={config.start_date}
+                onChange={(e) =>
+                  setConfig({ ...config, start_date: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              End date
+              <input
+                type="date"
+                value={config.end_date}
+                onChange={(e) =>
+                  setConfig({ ...config, end_date: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              Rebalance
+              <select
+                value={config.rebalance_frequency}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    rebalance_frequency: e.target
+                      .value as Config["rebalance_frequency"],
+                  })
+                }
+              >
+                <option value="none">Hold</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+              </select>
+            </label>
+            <label>
+              Starting capital
+              <input
+                type="number"
+                min="100"
+                value={config.initial_capital}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    initial_capital: Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              Transaction cost (bps)
+              <input
+                type="number"
+                min="0"
+                value={config.commission_bps}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    commission_bps: Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              Slippage (bps)
+              <input
+                type="number"
+                min="0"
+                value={config.slippage_bps}
+                onChange={(e) =>
+                  setConfig({ ...config, slippage_bps: Number(e.target.value) })
+                }
+              />
+            </label>
+          </section>
+        </div>
+        <div className="results-column">
+          <section className="ref-card results-card">
+            <div className="section-row">
+              <div className="eyeline">03 · RESULTS</div>
+              <span className="sample-badge">
+                {result?.status === "completed" ? "BACKTESTED" : "SAMPLE DATA"}
+              </span>
+            </div>
+            <div className="metric-strip">
+              <Metric
+                label="Ending value"
+                value={money(metrics.ending_value)}
+              />
+              <Metric label="CAGR" value={pct(metrics.cagr)} teal />
+              <Metric
+                label="Sharpe"
+                value={metrics.sharpe_ratio?.toFixed(2) ?? "-"}
+              />
+              <Metric
+                label="Max drawdown"
+                value={pct(metrics.max_drawdown)}
+                amber
+              />
+            </div>
+            {series ? (
+              <PerformanceChart data={series} />
+            ) : (
+              <div className="chart-placeholder">
+                {active ? (
+                  <Loader2 className="spin" size={30} />
+                ) : (
+                  <BarChart3 size={30} />
+                )}
+                <span>
+                  {active
+                    ? "Simulating your portfolio"
+                    : "Run a backtest to see the equity curve"}
+                </span>
+              </div>
+            )}
+            {result?.status === "completed" && (
+              <div className="report-actions">
+                <a
+                  href={`/api/v1/backtests/${result.id}/tear-sheet.pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <FileDown size={15} /> Tear sheet
+                </a>
+                <button onClick={emailReport} disabled={busy === "email"}>
+                  {busy === "email" ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : (
+                    <Mail size={15} />
+                  )}
+                  {busy === "email" ? "Sending…" : "Email report"}
+                </button>
+              </div>
+            )}
+          </section>
+          <div className="score-grid">
+            <section className="ref-card score-card">
+              <div className="eyeline">ROBUSTNESS</div>
+              <div
+                className="score-ring"
+                style={
+                  { "--score": `${score * 3.6}deg` } as React.CSSProperties
+                }
+              >
+                <strong>{score}</strong>
+              </div>
+              <p>{score > 70 ? "Moderate edge" : "Needs validation"}</p>
+            </section>
+            <section className="ref-card reason-card">
+              <div className="eyeline">WHY THIS SCORE</div>
+              <ScoreRow
+                label="Risk-adjusted return"
+                value={Math.min(
+                  100,
+                  Math.round((metrics.sharpe_ratio ?? 0.5) * 85),
+                )}
+              />
+              <ScoreRow
+                label="Diversification"
+                value={Math.min(100, Math.round(draft.holdings.length * 12))}
+              />
+              <ScoreRow
+                label="Drawdown control"
+                value={Math.max(
+                  0,
+                  Math.round(100 + (metrics.max_drawdown ?? -0.3) * 100),
+                )}
+              />
+              <p>
+                Hypothetical results include assumed costs and do not predict
+                future performance.
+              </p>
+            </section>
+          </div>
+        </div>
       </div>
-      <div className="results-column"><section className="ref-card results-card"><div className="section-row"><div className="eyeline">03 · RESULTS</div><span className="sample-badge">{result?.status==="completed"?"BACKTESTED":"SAMPLE DATA"}</span></div><div className="metric-strip"><Metric label="Ending value" value={money(metrics.ending_value)}/><Metric label="CAGR" value={pct(metrics.cagr)} teal/><Metric label="Sharpe" value={metrics.sharpe_ratio?.toFixed(2)??"-"}/><Metric label="Max drawdown" value={pct(metrics.max_drawdown)} amber/></div>{series?<PerformanceChart data={series}/>:<div className="chart-placeholder">{active?<Loader2 className="spin" size={30}/>:<BarChart3 size={30}/>}<span>{active?"Simulating your portfolio":"Run a backtest to see the equity curve"}</span></div>}{result?.status==="completed"&&<div className="report-actions"><a href={`/api/v1/backtests/${result.id}/tear-sheet.pdf`} target="_blank" rel="noreferrer"><FileDown size={15}/> Tear sheet</a><button onClick={emailReport} disabled={busy==="email"}>{busy==="email"?<Loader2 className="spin" size={15}/>:<Mail size={15}/>}{busy==="email"?"Sending…":"Email report"}</button></div>}</section><div className="score-grid"><section className="ref-card score-card"><div className="eyeline">ROBUSTNESS</div><div className="score-ring" style={{"--score":`${score*3.6}deg`} as React.CSSProperties}><strong>{score}</strong></div><p>{score>70?"Moderate edge":"Needs validation"}</p></section><section className="ref-card reason-card"><div className="eyeline">WHY THIS SCORE</div><ScoreRow label="Risk-adjusted return" value={Math.min(100,Math.round((metrics.sharpe_ratio??.5)*85))}/><ScoreRow label="Diversification" value={Math.min(100,Math.round(draft.holdings.length*12))}/><ScoreRow label="Drawdown control" value={Math.max(0,Math.round(100+((metrics.max_drawdown??-.3)*100)))}/><p>Hypothetical results include assumed costs and do not predict future performance.</p></section></div></div>
-    </div>
-  </AppShell>;
+    </AppShell>
+  );
 }
-function Metric({label,value,teal,amber}:{label:string;value:string;teal?:boolean;amber?:boolean}){return <div><span>{label}</span><strong className={teal?"teal":amber?"amber":""}>{value}</strong></div>}
-function ScoreRow({label,value}:{label:string;value:number}){return <div className="score-row"><span>{label}<b>{value}</b></span><i><em style={{width:`${value}%`}}/></i></div>}
-function AppShell({children,portfolios,onNew,onCopilot=()=>window.dispatchEvent(new Event("aquarius:open-copilot"))}:{children:React.ReactNode;portfolios:ETF[];onNew:()=>void;onCopilot?:()=>void}){const router=useRouter();const [freeRuns,setFreeRuns]=useState(10);useEffect(()=>{const stored=window.localStorage.getItem("aquarius:free-runs");if(stored!==null)setFreeRuns(Math.max(0,Math.min(10,Number(stored)||0)));const consume=()=>setFreeRuns(current=>{const next=Math.max(0,current-1);window.localStorage.setItem("aquarius:free-runs",String(next));return next;});window.addEventListener("aquarius:free-run",consume);return()=>window.removeEventListener("aquarius:free-run",consume);},[]);return <div className="reference-app"><header><button className="logo" onClick={()=>router.push("/dashboard")}>aquarius<span>baskets</span></button><nav><button onClick={()=>router.push("/dashboard")}>Build</button></nav><div className="header-actions"><button className="copilot-header" type="button" onClick={onCopilot}>AI Copilot</button><small>Free runs <b>{freeRuns} / 10</b></small><i style={{"--runs":`${freeRuns*10}%`} as React.CSSProperties}/><button className="upgrade">Upgrade</button></div></header><main>{children}</main></div>}
+function Metric({
+  label,
+  value,
+  teal,
+  amber,
+}: {
+  label: string;
+  value: string;
+  teal?: boolean;
+  amber?: boolean;
+}) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong className={teal ? "teal" : amber ? "amber" : ""}>{value}</strong>
+    </div>
+  );
+}
+function ScoreRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="score-row">
+      <span>
+        {label}
+        <b>{value}</b>
+      </span>
+      <i>
+        <em style={{ width: `${value}%` }} />
+      </i>
+    </div>
+  );
+}
+function AppShell({
+  children,
+  portfolios,
+  onNew,
+  onCopilot = () => window.dispatchEvent(new Event("aquarius:open-copilot")),
+}: {
+  children: React.ReactNode;
+  portfolios: ETF[];
+  onNew: () => void;
+  onCopilot?: () => void;
+}) {
+  const router = useRouter();
+  const [freeRuns, setFreeRuns] = useState(10);
+  useEffect(() => {
+    const stored = window.localStorage.getItem("aquarius:free-runs");
+    if (stored !== null)
+      setFreeRuns(Math.max(0, Math.min(10, Number(stored) || 0)));
+    const consume = () =>
+      setFreeRuns((current) => {
+        const next = Math.max(0, current - 1);
+        window.localStorage.setItem("aquarius:free-runs", String(next));
+        return next;
+      });
+    window.addEventListener("aquarius:free-run", consume);
+    return () => window.removeEventListener("aquarius:free-run", consume);
+  }, []);
+  return (
+    <div className="reference-app">
+      <header>
+        <button className="logo" onClick={() => router.push("/dashboard")}>
+          aquarius<span>baskets</span>
+        </button>
+        <nav>
+          <button onClick={() => router.push("/dashboard")}>Build</button>
+        </nav>
+        <div className="header-actions">
+          <button className="copilot-header" type="button" onClick={onCopilot}>
+            AI Copilot
+          </button>
+          <small>
+            Free runs <b>{freeRuns} / 10</b>
+          </small>
+          <i style={{ "--runs": `${freeRuns * 10}%` } as React.CSSProperties} />
+          <button className="upgrade">Upgrade</button>
+        </div>
+      </header>
+      <main>{children}</main>
+    </div>
+  );
+}

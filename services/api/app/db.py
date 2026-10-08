@@ -87,6 +87,26 @@ class ChatUsage(Base):
     request_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    title: Mapped[str] = mapped_column(String(160), default="New basket idea")
+    proposal: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=uid)
+    conversation_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    role: Mapped[str] = mapped_column(String(12))
+    content: Mapped[str] = mapped_column(String(4000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Usage(Base):
     __tablename__ = "usage"
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True)

@@ -9,6 +9,7 @@ from ..schemas import PortfolioInput, ResearchInput
 from .market import market
 from .weights import allocate
 from .ticker_identity import current_ticker, resolve_candidate, RENAMES
+from .vector_store import retrieve
 
 
 class Candidate(BaseModel):
@@ -105,6 +106,9 @@ def _generate_ai(request: ResearchInput, repairs):
         }
     )
     universe += f" Use current ticker symbols. Verified issuer renames: {RENAMES}."
+    retrieved = retrieve(request.prompt)
+    if retrieved:
+        universe += " Retrieved internal instrument context (use as candidate-discovery context; verify with web sources): " + " | ".join(retrieved)
     universe += " Each company must occur exactly once. ABC and COR are the SAME issuer: Cencora. Select distinct issuers, not alternate names for one company."
     if repairs:
         universe += f" The previous attempt failed validation: {repairs[-1]}. Repair that defect by researching distinct eligible replacements. Preserve the original theme, sector, required and excluded companies, holding count and weight cap. Do not repeat the invalid selection."

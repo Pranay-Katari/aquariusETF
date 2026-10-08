@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     app_mode: str = "demo"
     database_url: str = f"sqlite:///{ROOT}/data/aquarius.db"
     data_dir: Path = ROOT / "data"
+    # Chroma is reseeded from the vetted instrument catalog on startup. /tmp is
+    # writable in Cloud Run; configure CHROMA_PATH for durable external storage.
+    chroma_path: Path = Path("/tmp/aquarius-chroma")
     redis_url: str = ""
     supabase_url: str = ""
     supabase_anon_key: str = ""

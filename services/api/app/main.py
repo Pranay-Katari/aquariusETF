@@ -20,6 +20,8 @@ from .db import (
     Backtest,
     ResearchRun,
     ChatUsage,
+    ChatConversation,
+    ChatMessage,
     OrderPreview,
     Order,
     Session,
@@ -1071,9 +1073,41 @@ def research_chat(
     # provider/database failure was repaired.
     cache_key = key("research-chat:v2", body.model_dump(mode="json"))
     cached = get_json(cache_key)
-    if cached is not None:
-        return {**cached, "cache_hit": True}
-    response = respond(body)
+    cache_hit = cached is not None
+    response = cached if cache_hit else respond(body)
+    conversation_id = body.conversation_id
+    if conversation_id:
+        conversation = db.scalar(select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user))
+    else:
+        conversation = None
+    if conversation is None:
+        conversation = ChatConversation(id=uid(), user_id=user, title=body.messages[0][:160])
+        db.add(conversation)
+        db.flush()
+    existing = db.scalar(select(ChatMessage).where(ChatMessage.conversation_id == conversation.id).limit(1))
+    if existing is None:
+        for turn in body.history:
+            db.add(ChatMessage(conversation_id=conversation.id, user_id=user, role=turn.role, content=turn.text))
+    else:
+        db.add(ChatMessage(conversation_id=conversation.id, user_id=user, role="user", content=body.messages[-1]))
+    db.add(ChatMessage(conversation_id=conversation.id, user_id=user, role="assistant", content=response["message"]))
+    conversation.proposal = response.get("proposal")
+    conversation.updated_at = now()
+    db.commit()
     if response.get("proposal") is not None:
         set_json(cache_key, response, ttl_seconds=900)
-    return {**response, "cache_hit": False}
+    return {**response, "conversation_id": conversation.id, "cache_hit": cache_hit}
+
+
+@app.get("/v1/research/conversations")
+def chat_conversations(user=Depends(current_user), db: DBSession = Depends(get_db)):
+    return db.scalars(select(ChatConversation).where(ChatConversation.user_id == user).order_by(ChatConversation.updated_at.desc()).limit(30)).all()
+
+
+@app.get("/v1/research/conversations/{conversation_id}")
+def chat_conversation(conversation_id: str, user=Depends(current_user), db: DBSession = Depends(get_db)):
+    conversation = db.scalar(select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user))
+    if conversation is None:
+        raise HTTPException(404, "Conversation not found")
+    messages = db.scalars(select(ChatMessage).where(ChatMessage.conversation_id == conversation.id, ChatMessage.user_id == user).order_by(ChatMessage.created_at)).all()
+    return {"conversation": conversation, "messages": messages}

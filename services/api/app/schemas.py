@@ -144,6 +144,7 @@ class ChatTurn(StrictModel):
 
 
 class ResearchChatInput(StrictModel):
+    conversation_id: str | None = None
     history: list[ChatTurn] = Field(default_factory=list, max_length=40)
     current_proposal: PortfolioInput | None = None
     weighting: Literal["equal", "theme"] = "theme"
