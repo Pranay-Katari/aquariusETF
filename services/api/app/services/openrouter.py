@@ -39,7 +39,7 @@ def call_openrouter(payload):
     # them here so the UI only shows an error after the provider is genuinely
     # unavailable, rather than making a user manually resend the same prompt.
     response = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             response = httpx.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -62,10 +62,15 @@ def call_openrouter(payload):
             raise ValueError("OpenRouter rejected the API key or model access. Check the server credentials.")
         if response.status_code in (408, 429) or response.status_code >= 500:
             logger.warning("openrouter_transient_response attempt=%s status=%s", attempt + 1, response.status_code)
-            if attempt < 2:
-                time.sleep(1 + attempt)
+            if attempt < 3:
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    delay = min(20, max(1, int(float(retry_after))))
+                except ValueError:
+                    delay = 2 ** attempt
+                time.sleep(delay)
                 continue
-            raise ValueError("OpenRouter is temporarily unavailable due to provider load. Please retry in a moment.")
+            raise ValueError("OpenRouter is rate-limited right now. Your draft is saved; wait about a minute and retry.")
         try:
             response.raise_for_status()
             data = response.json()
