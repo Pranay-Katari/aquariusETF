@@ -101,12 +101,23 @@ export type WalkForward = {
     unseen_total_return: number;
     unseen_benchmark_return: number;
     unseen_max_drawdown: number;
+    unseen_equal_weight_return: number;
+    unseen_original_weight_return: number;
   }[];
   summary: {
     median_unseen_return: number;
     mean_unseen_return: number;
     mean_unseen_benchmark_return: number;
+    mean_excess_vs_benchmark: number;
     win_rate_vs_benchmark: number;
+    mean_equal_weight_return: number;
+    mean_original_weight_return: number;
+    mean_excess_vs_equal_weight: number;
+    mean_excess_vs_original_weight: number;
+    win_rate_vs_equal_weight: number;
+    max_weight_percent: number;
+    min_effective_holdings: number;
   };
+  verdict: string;
   warning: string;
 };

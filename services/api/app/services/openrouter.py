@@ -70,7 +70,7 @@ def call_openrouter(payload):
                     delay = 2 ** attempt
                 time.sleep(delay)
                 continue
-            raise ValueError("OpenRouter is rate-limited right now. Your draft is saved; wait about a minute and retry.")
+            raise ValueError("OpenRouter is temporarily unavailable due to rate limits. Your draft is saved; wait about a minute and retry.")
         try:
             response.raise_for_status()
             data = response.json()

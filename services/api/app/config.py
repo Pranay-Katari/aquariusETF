@@ -23,18 +23,15 @@ class Settings(BaseSettings):
     # only as an explicit demo fallback.
     market_data_provider: str = "yahoo"
     market_data_api_key: str = ""
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
     research_provider: str = "curated"
     llm_api_key: str = ""
     llm_model: str = ""
-    chat_request_limit: int = 10
-    chat_request_window_seconds: int = 86400
     paper_owner_user_id: str = ""
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     paper_trading_enabled: bool = False
     local_paper_trading_enabled: bool = False
-    free_run_limit: int = 10
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_id: str = ""

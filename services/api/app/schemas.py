@@ -85,10 +85,6 @@ class BacktestInput(StrictModel):
             raise ValueError("Start date must precede end date")
         if self.end_date > date.today():
             raise ValueError("End date cannot be in the future")
-        if (self.end_date - self.start_date).days > 3653:
-            raise ValueError("Maximum history is 10 years")
-        if self.start_date < date(2000, 1, 1):
-            raise ValueError("History starts in 2000")
         return self
 
 
@@ -108,8 +104,8 @@ class OptimizeInput(StrictModel):
     def valid_dates(self):
         if self.start_date >= self.end_date:
             raise ValueError("Start date must precede end date")
-        if self.end_date > date.today() or (self.end_date - self.start_date).days > 3653:
-            raise ValueError("Choose a completed period of up to 10 years")
+        if self.end_date > date.today():
+            raise ValueError("End date cannot be in the future")
         return self
 
 

@@ -11,14 +11,14 @@ def _usage(db, user_id: str) -> Usage:
     current = now()
     row = db.scalar(select(Usage).where(Usage.user_id == user_id).with_for_update())
     if row is None:
-        row = Usage(user_id=user_id, period_start=current, period_end=current + timedelta(days=30), runs_limit=settings.free_run_limit)
+        row = Usage(user_id=user_id, period_start=current, period_end=current + timedelta(days=30), runs_limit=0)
         db.add(row)
         db.flush()
     elif current.replace(tzinfo=None) >= row.period_end.replace(tzinfo=None):
         row.period_start = current
         row.period_end = current + timedelta(days=30)
         row.runs_used = 0
-        row.runs_limit = settings.free_run_limit
+        row.runs_limit = 0
     return row
 
 
@@ -32,8 +32,6 @@ def start_run(db, user_id: str, kind: str, run_key: str) -> UsageEvent:
     if existing:
         return existing
     usage = _usage(db, user_id)
-    if not is_pro(db, user_id) and usage.runs_used >= usage.runs_limit:
-        raise HTTPException(402, "limit_reached")
     usage.runs_used += 1
     event = UsageEvent(run_key=run_key, user_id=user_id, kind=kind)
     db.add(event)
@@ -53,4 +51,4 @@ def finish_run(db, run_key: str, ok: bool) -> None:
 def status(db, user_id: str) -> dict:
     usage = _usage(db, user_id)
     pro = is_pro(db, user_id)
-    return {"plan": "pro" if pro else "free", "runs_used": usage.runs_used, "runs_limit": usage.runs_limit, "runs_remaining": None if pro else max(0, usage.runs_limit - usage.runs_used), "period_end": usage.period_end}
+    return {"plan": "pro" if pro else "free", "runs_used": usage.runs_used, "runs_limit": None, "runs_remaining": None, "period_end": usage.period_end}

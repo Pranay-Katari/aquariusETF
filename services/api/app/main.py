@@ -19,7 +19,6 @@ from .db import (
     ETFHolding,
     Backtest,
     ResearchRun,
-    ChatUsage,
     ChatConversation,
     ChatMessage,
     OrderPreview,
@@ -81,9 +80,13 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Aquarius Baskets API", version="1.0.0", lifespan=lifespan)
+local_dev_origins = ["http://localhost:3001", "http://127.0.0.1:3001"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
+    # Always accept the documented local frontend origin.  This keeps a stale
+    # production-oriented .env CORS_ORIGINS value from breaking local search,
+    # chat, and backtest requests.
+    allow_origins=list(dict.fromkeys(settings.cors_origins.split(",") + local_dev_origins)),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -515,24 +518,54 @@ def optimize_weights(
         symbols = sorted({h["ticker"] for h in holdings} | {body.benchmark})
         history = {symbol: market.prices(symbol, start, end) for symbol in symbols}
         expected = set(sessions(start, end))
-        if any(expected - set(series.index) for series in history.values()):
-            raise MarketError("The selected period has incomplete price history")
+        for symbol, series in history.items():
+            missing = expected - set(series.index)
+            if missing:
+                raise MarketError(
+                    f"{symbol} has no complete price history for this range "
+                    f"({len(missing)} sessions missing; first {min(missing)}). "
+                    "Move the start date later or choose holdings with longer histories."
+                )
         prices = pd.DataFrame({h["ticker"]: history[h["ticker"]] for h in holdings})
         benchmark = history[body.benchmark]
         rng = np.random.default_rng(int(canonical_hash({"id": id, "config": cfg})[:16], 16))
-        # Each name gets at least 1% and at most 50%, preventing a trivial one-name answer.
+        # Keep the retrospective search useful without allowing it to turn a thematic
+        # basket into a disguised single-stock bet.  The effective-holdings floor is
+        # 1 / sum(w²): an 8-name basket therefore needs at least five meaningful
+        # positions, even when historical return favors a recent winner.
+        max_weight = 50 if count == 2 else 40 if count == 3 else 30 if count == 4 else 25
+        min_effective_holdings = max(2, int(np.ceil(count * 0.60)))
+
+        def diversified(weights: np.ndarray) -> bool:
+            effective_holdings = 1 / float(np.square(weights / 100).sum())
+            return weights.max() <= max_weight and effective_holdings >= min_effective_holdings
+
         candidates = [np.full(count, 100 // count, dtype=int)]
         candidates[0][: 100 % count] += 1
         if count == 2:
             # With the 50% cap, this is the only valid two-name allocation.
             candidates = [np.array([50, 50], dtype=int)]
         else:
-            while len(candidates) < 500:
+            seen = {tuple(candidates[0])}
+            attempts = 0
+            while len(candidates) < 500 and attempts < 50_000:
+                attempts += 1
                 weights = np.ones(count, dtype=int)
                 remaining = 100 - count
-                proposal = weights + rng.multinomial(remaining, rng.dirichlet(np.ones(count)))
-                if proposal.max() <= 50:
+                # Concentration 2.5 is centered around equal weighting, making
+                # diversified candidates plentiful while preserving variety.
+                proposal = weights + rng.multinomial(
+                    remaining, rng.dirichlet(np.full(count, 2.5))
+                )
+                key = tuple(proposal)
+                if key not in seen and diversified(proposal):
                     candidates.append(proposal)
+                    seen.add(key)
+            if len(candidates) < 500:
+                raise MarketError(
+                    "Could not generate enough diversified allocations for these holdings. "
+                    "Add holdings or use a less concentrated basket."
+                )
         best_weights, best_result = candidates[0], None
         for candidate in candidates:
             trial = [{**holding, "target_weight": int(weight) / 100} for holding, weight in zip(holdings, candidate)]
@@ -544,8 +577,18 @@ def optimize_weights(
     return {
         "holdings": [{**holding, "target_weight": int(weight) / 100} for holding, weight in zip(holdings, best_weights)],
         "metrics": best_result["metrics"],
-        "constraints": {"min_weight_percent": 1, "max_weight_percent": 50, "candidates_tested": len(candidates)},
-        "warning": "In-sample optimization: these weights maximize historical ending value only over the selected period and are prone to overfitting. Review before saving or backtesting.",
+        "constraints": {
+            "min_weight_percent": 1,
+            "max_weight_percent": max_weight,
+            "min_effective_holdings": min_effective_holdings,
+            "candidates_tested": len(candidates),
+        },
+        "warning": (
+            f"Diversified in-sample optimization: capped at {max_weight}% per holding "
+            f"with at least {min_effective_holdings} effective holdings. These weights "
+            "still maximize historical ending value only over the selected period; validate "
+            "them on unseen windows before using."
+        ),
     }
 
 
@@ -564,6 +607,13 @@ def walk_forward_validate(
     count = len(holdings)
     if not 2 <= count <= 25:
         raise HTTPException(422, "Walk-forward validation requires 2–25 holdings")
+    max_weight = 50 if count == 2 else 40 if count == 3 else 30 if count == 4 else 25
+    min_effective_holdings = max(2, int(np.ceil(count * 0.60)))
+
+    def diversified(weights: np.ndarray) -> bool:
+        effective_holdings = 1 / float(np.square(weights / 100).sum())
+        return weights.max() <= max_weight and effective_holdings >= min_effective_holdings
+
     cfg = body.model_dump(mode="json", exclude={"test_sessions"})
     try:
         symbols = sorted({h["ticker"] for h in holdings} | {body.benchmark})
@@ -587,12 +637,22 @@ def walk_forward_validate(
             if count == 2:
                 candidates = [np.array([50, 50], dtype=int)]
             else:
-                while len(candidates) < 300:
+                seen = {tuple(candidates[0])}
+                attempts = 0
+                while len(candidates) < 300 and attempts < 30_000:
+                    attempts += 1
                     proposal = np.ones(count, dtype=int) + rng.multinomial(
-                        100 - count, rng.dirichlet(np.ones(count))
+                        100 - count, rng.dirichlet(np.full(count, 2.5))
                     )
-                    if proposal.max() <= 50:
+                    key = tuple(proposal)
+                    if key not in seen and diversified(proposal):
                         candidates.append(proposal)
+                        seen.add(key)
+                if len(candidates) < 300:
+                    raise MarketError(
+                        "Could not generate enough diversified allocations for walk-forward validation. "
+                        "Add holdings or use a less concentrated basket."
+                    )
             best_weights, best_training = candidates[0], None
             for candidate in candidates:
                 trial = [
@@ -617,6 +677,21 @@ def walk_forward_validate(
                 selected,
                 cfg,
             )
+            equal_weight = [
+                {**holding, "target_weight": 1 / count} for holding in holdings
+            ]
+            equal = simulate(
+                test_prices[[h["ticker"] for h in holdings]],
+                test_prices[body.benchmark],
+                equal_weight,
+                cfg,
+            )
+            original = simulate(
+                test_prices[[h["ticker"] for h in holdings]],
+                test_prices[body.benchmark],
+                holdings,
+                cfg,
+            )
             folds.append(
                 {
                     "training_end": str(train_prices.index[-1]),
@@ -627,21 +702,43 @@ def walk_forward_validate(
                     "unseen_total_return": unseen["metrics"]["total_return"],
                     "unseen_benchmark_return": unseen["metrics"]["benchmark_return"],
                     "unseen_max_drawdown": unseen["metrics"]["max_drawdown"],
+                    "unseen_equal_weight_return": equal["metrics"]["total_return"],
+                    "unseen_original_weight_return": original["metrics"]["total_return"],
                 }
             )
     except (MarketError, ValueError) as exc:
         raise HTTPException(422, str(exc))
     unseen_returns = [fold["unseen_total_return"] for fold in folds]
     benchmark_returns = [fold["unseen_benchmark_return"] for fold in folds]
+    equal_returns = [fold["unseen_equal_weight_return"] for fold in folds]
+    original_returns = [fold["unseen_original_weight_return"] for fold in folds]
+    excess_vs_benchmark = float(np.mean(np.array(unseen_returns) - np.array(benchmark_returns)))
+    win_rate_vs_benchmark = float(np.mean(np.array(unseen_returns) > np.array(benchmark_returns)))
+    excess_vs_equal = float(np.mean(np.array(unseen_returns) - np.array(equal_returns)))
+    if excess_vs_benchmark > 0 and win_rate_vs_benchmark >= 2 / 3:
+        verdict = "Preliminary evidence only: the diversified optimizer beat the benchmark in most unseen windows."
+    elif excess_vs_equal > 0:
+        verdict = "The diversified optimizer improved on equal weights, but has not shown reliable benchmark outperformance."
+    else:
+        verdict = "No reliable out-of-sample advantage was found; prefer the benchmark or equal weights."
     return {
         "folds": folds,
         "summary": {
             "median_unseen_return": float(np.median(unseen_returns)),
             "mean_unseen_return": float(np.mean(unseen_returns)),
             "mean_unseen_benchmark_return": float(np.mean(benchmark_returns)),
-            "win_rate_vs_benchmark": float(np.mean(np.array(unseen_returns) > np.array(benchmark_returns))),
+            "mean_excess_vs_benchmark": excess_vs_benchmark,
+            "win_rate_vs_benchmark": win_rate_vs_benchmark,
+            "mean_equal_weight_return": float(np.mean(equal_returns)),
+            "mean_original_weight_return": float(np.mean(original_returns)),
+            "mean_excess_vs_equal_weight": excess_vs_equal,
+            "mean_excess_vs_original_weight": float(np.mean(np.array(unseen_returns) - np.array(original_returns))),
+            "win_rate_vs_equal_weight": float(np.mean(np.array(unseen_returns) > np.array(equal_returns))),
+            "max_weight_percent": max_weight,
+            "min_effective_holdings": min_effective_holdings,
         },
-        "warning": "Each fold chooses weights only from data available before its test window. This reduces, but does not eliminate, selection bias; it is not a forecast or a recommendation.",
+        "verdict": verdict,
+        "warning": "Each fold selects weights using only prior data, then compares them on unseen sessions against equal-weight, original-weight, and market benchmarks. This reduces, but does not eliminate, selection bias; it is not a forecast or recommendation.",
     }
 
 
@@ -1042,29 +1139,6 @@ def research_chat(
 
     run_key = f"copilot:{uuid.uuid4()}"
     start_run(db, user, "copilot", run_key)
-    usage = db.scalar(
-        select(ChatUsage).where(ChatUsage.user_id == user).with_for_update()
-    )
-    current = now()
-    window = timedelta(seconds=settings.chat_request_window_seconds)
-    if usage is None:
-        usage = ChatUsage(user_id=user, window_started_at=current, request_count=0)
-        db.add(usage)
-    else:
-        # SQLite can round-trip a timezone-aware timestamp as naive. Normalize
-        # legacy rows before comparing the request window after an API restart.
-        if usage.window_started_at.tzinfo is None:
-            usage.window_started_at = usage.window_started_at.replace(tzinfo=timezone.utc)
-        if current - usage.window_started_at >= window:
-            usage.window_started_at = current
-            usage.request_count = 0
-    if usage.request_count >= settings.chat_request_limit:
-        reset_at = usage.window_started_at + window
-        raise HTTPException(
-            429,
-            f"Chat limit reached ({settings.chat_request_limit} requests). Try again after {reset_at.isoformat()}.",
-        )
-    usage.request_count += 1
     finish_run(db, run_key, True)
     db.commit()
 

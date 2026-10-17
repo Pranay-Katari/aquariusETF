@@ -5,7 +5,9 @@ export const supabase = url && key ? createClient(url, key) : null;
 const apiBase =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" && window.location.hostname === "127.0.0.1"
-    ? "http://127.0.0.1:8000"
+    // `npm run dev` uses 3001 here; its paired local API uses 8001. Keeping
+    // this automatic means ticker search does not silently call another API.
+    ? `http://127.0.0.1:${window.location.port === "3001" ? "8001" : "8000"}`
     : "/api");
 export async function api<T>(
   path: string,
@@ -30,7 +32,12 @@ export async function api<T>(
     const d = data.detail;
     throw new Error(
       Array.isArray(d)
-        ? d.map((v: { msg: string }) => v.msg).join("; ")
+        ? d
+            .map(
+              (v: { loc?: string[]; msg: string }) =>
+                `${v.loc?.join(".") ?? "request"}: ${v.msg}`,
+            )
+            .join("; ")
         : typeof d === "string"
           ? d
           : `Request failed (${response.status})`,

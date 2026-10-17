@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api, defaultConfig, money, pct } from "@/lib/api";
-import type { Backtest, Config, ETF, Holding, Series } from "@/lib/types";
+import type { Backtest, Config, ETF, Holding, Series, WalkForward } from "@/lib/types";
 import PerformanceChart from "./PerformanceChart";
 import CopilotModal from "./CopilotModal";
 
@@ -25,6 +25,24 @@ const blank = () => ({
   description: "",
   holdings: [] as Holding[],
 });
+// A stored backtest also contains IDs and other metadata. Only these fields are
+// valid input for a new run, optimizer, or walk-forward validation.
+const simulationConfig = (config: Config): Config => ({
+  start_date: config.start_date,
+  end_date: config.end_date,
+  initial_capital: config.initial_capital,
+  benchmark: config.benchmark,
+  rebalance_frequency: config.rebalance_frequency,
+  commission_bps: config.commission_bps,
+  slippage_bps: config.slippage_bps,
+  dividend_mode: config.dividend_mode,
+  risk_free_rate: config.risk_free_rate,
+});
+type StudyItem = {
+  name: string;
+  validation?: WalkForward;
+  error?: string;
+};
 const ideas = [
   "AI infrastructure",
   "Bitcoin + miners",
@@ -96,6 +114,7 @@ export default function Workspace() {
     [config, setConfig] = useState<Config>(defaultConfig),
     [result, setResult] = useState<Backtest | null>(null),
     [series, setSeries] = useState<Series | null>(null),
+    [walkForward, setWalkForward] = useState<WalkForward | null>(null),
     [query, setQuery] = useState(""),
     [matches, setMatches] = useState<
       { ticker: string; company_name: string; theme_tag: string }[]
@@ -106,6 +125,7 @@ export default function Workspace() {
     [basketType, setBasketType] = useState<
       "equities" | "crypto" | "commodities"
     >("equities");
+  const [study, setStudy] = useState<StudyItem[] | null>(null);
   const dashboard = pathname === "/" || pathname === "/dashboard";
   const total = useMemo(
     () => draft.holdings.reduce((n, holding) => n + holding.target_weight, 0),
@@ -140,7 +160,7 @@ export default function Workspace() {
     });
     const history = await api<Backtest[]>(`/v1/etfs/${etf.id}/backtests`);
     setResult(history[0] ?? null);
-    if (history[0]) setConfig(history[0].config);
+    if (history[0]) setConfig(simulationConfig(history[0].config));
   }, []);
   useEffect(() => {
     let canceled = false;
@@ -182,6 +202,24 @@ export default function Workspace() {
       .then(setSeries)
       .catch((e) => setError(e.message));
   }, [result?.id, result?.status]);
+  // Walk-forward output is valid only for the exact saved holdings and simulation
+  // assumptions used to generate it. Never leave an old verdict visible after a
+  // user edits the basket, date range, benchmark, rebalancing, or costs.
+  useEffect(() => {
+    setWalkForward(null);
+    setStudy(null);
+  }, [
+    selected?.version,
+    draft.holdings,
+    config.start_date,
+    config.end_date,
+    config.benchmark,
+    config.rebalance_frequency,
+    config.commission_bps,
+    config.slippage_bps,
+    config.initial_capital,
+    config.risk_free_rate,
+  ]);
   useEffect(() => {
     if (!query.trim()) {
       setMatches([]);
@@ -235,13 +273,12 @@ export default function Workspace() {
         await api<Backtest>("/v1/backtests", {
           method: "POST",
           body: JSON.stringify({
-            ...config,
+            ...simulationConfig(config),
             etf_id: etf.id,
             portfolio_version: etf.version,
           }),
         }),
       );
-      window.dispatchEvent(new Event("aquarius:free-run"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Backtest could not start.");
     } finally {
@@ -324,7 +361,10 @@ export default function Workspace() {
         `/v1/etfs/${etf.id}/optimize`,
         {
           method: "POST",
-          body: JSON.stringify({ ...config, portfolio_version: etf.version }),
+          body: JSON.stringify({
+            ...simulationConfig(config),
+            portfolio_version: etf.version,
+          }),
         },
       );
       setSelected(etf);
@@ -337,6 +377,47 @@ export default function Workspace() {
     } finally {
       setBusy("");
     }
+  }
+  async function validateOutOfSample() {
+    if (!selected || !valid) return;
+    setBusy("validate"); setError("");
+    try { setWalkForward(await api<WalkForward>(`/v1/etfs/${selected.id}/walk-forward`, { method: "POST", body: JSON.stringify({ ...simulationConfig(config), portfolio_version: selected.version, test_sessions: 63 }) })); }
+    catch (e) { setError(e instanceof Error ? e.message : "Out-of-sample validation could not run."); }
+    finally { setBusy(""); }
+  }
+  async function validateSavedBaskets() {
+    if (portfolios.length < 2) {
+      setError("Save at least two baskets before running an aggregate study.");
+      return;
+    }
+    setBusy("study");
+    setError("");
+    const results: StudyItem[] = [];
+    // Sequential requests avoid overwhelming the market-data provider while each
+    // basket receives the exact same unseen-window assumptions.
+    for (const portfolio of portfolios) {
+      try {
+        const validation = await api<WalkForward>(
+          `/v1/etfs/${portfolio.id}/walk-forward`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              ...simulationConfig(config),
+              portfolio_version: portfolio.version,
+              test_sessions: 63,
+            }),
+          },
+        );
+        results.push({ name: portfolio.name, validation });
+      } catch (e) {
+        results.push({
+          name: portfolio.name,
+          error: e instanceof Error ? e.message : "Validation failed.",
+        });
+      }
+    }
+    setStudy(results);
+    setBusy("");
   }
   async function emailReport() {
     if (!result?.id) return;
@@ -384,17 +465,17 @@ export default function Workspace() {
   }
   function normalize() {
     setDraft((current) => {
-      const existing = current.holdings.reduce(
-        (n, h) => n + h.target_weight,
-        0,
-      );
+      const count = current.holdings.length;
+      if (!count) return current;
+      // Use integer basis points so equal weighting is exact even when the
+      // holding count does not divide cleanly into 100.
+      const base = Math.floor(10_000 / count);
+      const remainder = 10_000 - base * count;
       return {
         ...current,
-        holdings: current.holdings.map((h) => ({
+        holdings: current.holdings.map((h, index) => ({
           ...h,
-          target_weight: existing
-            ? h.target_weight / existing
-            : 1 / current.holdings.length,
+          target_weight: (base + (index < remainder ? 1 : 0)) / 10_000,
         })),
       };
     });
@@ -780,7 +861,11 @@ export default function Workspace() {
             <div className="section-row">
               <div className="eyeline">03 · RESULTS</div>
               <span className="sample-badge">
-                {result?.status === "completed" ? "BACKTESTED" : "SAMPLE DATA"}
+                {result?.status === "completed"
+                  ? "BACKTESTED"
+                  : active
+                    ? "RUNNING"
+                    : "NOT RUN"}
               </span>
             </div>
             <div className="metric-strip">
@@ -798,6 +883,62 @@ export default function Workspace() {
                 value={pct(metrics.max_drawdown)}
                 amber
               />
+            </div>
+            <div className="validation-panel" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "12px 18px", alignItems: "center", margin: "2px 0 16px", padding: "13px 0", borderTop: "1px solid #284466", borderBottom: "1px solid #284466" }}>
+              <div className="validation-copy" style={{ display: "grid", gap: 3 }}>
+                <strong>Out-of-sample validation</strong>
+                <small style={{ color: "var(--muted)", fontSize: 11 }}>Three unseen windows · optimized weights vs baselines</small>
+              </div>
+              <button
+                onClick={validateOutOfSample}
+                disabled={!selected || !valid || !!busy}
+                title={!selected ? "Save this basket before validating" : undefined}
+                style={{ border: "1px solid #3b5d85", borderRadius: 8, background: "#102139", color: "#eaf1ff", padding: "9px 12px", fontWeight: 800, whiteSpace: "nowrap" }}
+              >
+                {busy === "validate" ? "Validating…" : "Validate weights"}
+              </button>
+              <button
+                onClick={validateSavedBaskets}
+                disabled={portfolios.length < 2 || !!busy}
+                title={portfolios.length < 2 ? "Save at least two baskets to run a study" : "Validate every saved basket with these assumptions"}
+                style={{ gridColumn: "1 / -1", border: "1px solid #3b5d85", borderRadius: 8, background: "transparent", color: "#eaf1ff", padding: "9px 12px", fontWeight: 800 }}
+              >
+                {busy === "study" ? "Studying saved baskets…" : `Study all saved baskets (${portfolios.length})`}
+              </button>
+              {walkForward && (
+                <div className="validation-metrics" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+                  <Metric label="Excess vs equal" value={pct(walkForward.summary.mean_excess_vs_equal_weight)} teal />
+                  <Metric label="Win rate vs equal" value={pct(walkForward.summary.win_rate_vs_equal_weight)} />
+                  <Metric label={`Excess vs ${config.benchmark}`} value={pct(walkForward.summary.mean_excess_vs_benchmark)} />
+                  <p style={{ gridColumn: "1 / -1", margin: 0, color: "var(--muted)", fontSize: 11, lineHeight: 1.5 }}>
+                    {walkForward.verdict} Cap: {walkForward.summary.max_weight_percent}% · minimum effective holdings: {walkForward.summary.min_effective_holdings}.
+                  </p>
+                  <details style={{ gridColumn: "1 / -1", color: "var(--muted)", fontSize: 11 }}>
+                    <summary style={{ cursor: "pointer", color: "var(--text)" }}>View unseen-window results</summary>
+                    <div style={{ display: "grid", gap: 5, marginTop: 8 }}>
+                      {walkForward.folds.map((fold, index) => (
+                        <div key={fold.test_start} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 10 }}>
+                          <span>Fold {index + 1}</span><span>{fold.test_start} → {fold.test_end}</span><span>Basket {pct(fold.unseen_total_return)}</span><span>{config.benchmark} {pct(fold.unseen_benchmark_return)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+              {study && (() => {
+                const completed = study.filter((item) => item.validation);
+                const mean = (field: "mean_excess_vs_benchmark" | "mean_excess_vs_equal_weight") => completed.length
+                  ? completed.reduce((sum, item) => sum + (item.validation?.summary[field] ?? 0), 0) / completed.length
+                  : null;
+                return (
+                  <div style={{ gridColumn: "1 / -1", borderTop: "1px solid #284466", paddingTop: 12, display: "grid", gap: 6 }}>
+                    <strong>Saved-basket study</strong>
+                    <small style={{ color: "var(--muted)" }}>{completed.length} of {study.length} baskets completed using identical assumptions.</small>
+                    {completed.length > 0 && <div style={{ display: "flex", gap: 18 }}><span>Mean vs equal: <b>{pct(mean("mean_excess_vs_equal_weight"))}</b></span><span>Mean vs {config.benchmark}: <b>{pct(mean("mean_excess_vs_benchmark"))}</b></span></div>}
+                    {study.filter((item) => item.error).map((item) => <small key={item.name} style={{ color: "var(--amber)" }}>{item.name}: {item.error}</small>)}
+                  </div>
+                );
+              })()}
             </div>
             {series ? (
               <PerformanceChart data={series} />
@@ -922,20 +1063,6 @@ function AppShell({
   onCopilot?: () => void;
 }) {
   const router = useRouter();
-  const [freeRuns, setFreeRuns] = useState(10);
-  useEffect(() => {
-    const stored = window.localStorage.getItem("aquarius:free-runs");
-    if (stored !== null)
-      setFreeRuns(Math.max(0, Math.min(10, Number(stored) || 0)));
-    const consume = () =>
-      setFreeRuns((current) => {
-        const next = Math.max(0, current - 1);
-        window.localStorage.setItem("aquarius:free-runs", String(next));
-        return next;
-      });
-    window.addEventListener("aquarius:free-run", consume);
-    return () => window.removeEventListener("aquarius:free-run", consume);
-  }, []);
   return (
     <div className="reference-app">
       <header>
@@ -949,11 +1076,6 @@ function AppShell({
           <button className="copilot-header" type="button" onClick={onCopilot}>
             AI Copilot
           </button>
-          <small>
-            Free runs <b>{freeRuns} / 10</b>
-          </small>
-          <i style={{ "--runs": `${freeRuns * 10}%` } as React.CSSProperties} />
-          <button className="upgrade">Upgrade</button>
         </div>
       </header>
       <main>{children}</main>
