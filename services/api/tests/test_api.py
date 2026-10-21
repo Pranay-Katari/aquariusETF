@@ -92,6 +92,33 @@ def test_validation(client):
     )
 
 
+def test_walk_forward_validation_returns_a_complete_result(client):
+    portfolio = client.post(
+        "/v1/etfs",
+        json={
+            "name": "Validation basket",
+            "holdings": [
+                {"ticker": "SPY", "target_weight": 1 / 3},
+                {"ticker": "QQQ", "target_weight": 1 / 3},
+                {"ticker": "VTI", "target_weight": 1 / 3},
+            ],
+        },
+    ).json()
+    response = client.post(
+        f"/v1/etfs/{portfolio['id']}/walk-forward",
+        json={
+            "portfolio_version": portfolio["version"],
+            "start_date": "2022-01-03",
+            "end_date": "2024-12-31",
+            "test_sessions": 20,
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["folds"]) == 3
+    assert payload["summary"]["max_weight_percent"] == 40
+
+
 def test_ownership(client):
     p = portfolio(client)
     app.dependency_overrides[current_user] = lambda: "different-user"

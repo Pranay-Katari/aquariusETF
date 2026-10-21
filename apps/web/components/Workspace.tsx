@@ -126,6 +126,7 @@ export default function Workspace() {
       "equities" | "crypto" | "commodities"
     >("equities");
   const [study, setStudy] = useState<StudyItem[] | null>(null);
+  const [studyProgress, setStudyProgress] = useState(0);
   const dashboard = pathname === "/" || pathname === "/dashboard";
   const total = useMemo(
     () => draft.holdings.reduce((n, holding) => n + holding.target_weight, 0),
@@ -134,7 +135,7 @@ export default function Workspace() {
   const valid = draft.holdings.length > 0 && Math.abs(total - 1) < 0.0001;
   const active = result?.status === "queued" || result?.status === "running";
   const metrics = result?.metrics ?? {};
-  const score = Math.min(
+  const score = result?.status === "completed" ? Math.min(
     99,
     Math.max(
       0,
@@ -144,7 +145,7 @@ export default function Workspace() {
           Math.max(-0.2, metrics.max_drawdown ?? -0.3) * 100,
       ),
     ),
-  );
+  ) : null;
   const load = useCallback(async () => {
     const list = await api<ETF[]>("/v1/etfs");
     setPortfolios(list);
@@ -261,7 +262,12 @@ export default function Workspace() {
       description: etf.description,
       holdings: etf.holdings,
     });
-    await load();
+    // Keep the list current without a second, blocking request. A just-saved
+    // basket can now move directly into its simulation.
+    setPortfolios((current) => [
+      etf,
+      ...current.filter((item) => item.id !== etf.id),
+    ]);
     return etf;
   }
   async function backtest() {
@@ -323,7 +329,10 @@ export default function Workspace() {
         description: response.etf.description,
         holdings: response.etf.holdings,
       });
-      await load();
+      setPortfolios((current) => [
+        response.etf,
+        ...current.filter((item) => item.id !== response.etf.id),
+      ]);
       router.replace(`/etf/${response.etf.id}`);
     } catch (e) {
       setError(
@@ -392,11 +401,13 @@ export default function Workspace() {
     }
     setBusy("study");
     setError("");
+    setStudyProgress(0);
     const results: StudyItem[] = [];
     // Sequential requests avoid overwhelming the market-data provider while each
     // basket receives the exact same unseen-window assumptions.
-    for (const portfolio of portfolios) {
-      try {
+    try {
+      for (const portfolio of portfolios) {
+        try {
         const validation = await api<WalkForward>(
           `/v1/etfs/${portfolio.id}/walk-forward`,
           {
@@ -408,16 +419,20 @@ export default function Workspace() {
             }),
           },
         );
-        results.push({ name: portfolio.name, validation });
-      } catch (e) {
-        results.push({
-          name: portfolio.name,
-          error: e instanceof Error ? e.message : "Validation failed.",
-        });
+          results.push({ name: portfolio.name, validation });
+        } catch (e) {
+          results.push({
+            name: portfolio.name,
+            error: e instanceof Error ? e.message : "Validation failed.",
+          });
+        } finally {
+          setStudyProgress(results.length);
+        }
       }
+      setStudy(results);
+    } finally {
+      setBusy("");
     }
-    setStudy(results);
-    setBusy("");
   }
   async function emailReport() {
     if (!result?.id) return;
@@ -903,7 +918,7 @@ export default function Workspace() {
                 title={portfolios.length < 2 ? "Save at least two baskets to run a study" : "Validate every saved basket with these assumptions"}
                 style={{ gridColumn: "1 / -1", border: "1px solid #3b5d85", borderRadius: 8, background: "transparent", color: "#eaf1ff", padding: "9px 12px", fontWeight: 800 }}
               >
-                {busy === "study" ? "Studying saved baskets…" : `Study all saved baskets (${portfolios.length})`}
+                {busy === "study" ? `Studying saved baskets (${studyProgress}/${portfolios.length})…` : `Study all saved baskets (${portfolios.length})`}
               </button>
               {walkForward && (
                 <div className="validation-metrics" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
@@ -982,12 +997,12 @@ export default function Workspace() {
               <div
                 className="score-ring"
                 style={
-                  { "--score": `${score * 3.6}deg` } as React.CSSProperties
+                  { "--score": `${(score ?? 0) * 3.6}deg` } as React.CSSProperties
                 }
               >
-                <strong>{score}</strong>
+                <strong>{score ?? "—"}</strong>
               </div>
-              <p>{score > 70 ? "Moderate edge" : "Needs validation"}</p>
+              <p>{score === null ? "Run a backtest" : score > 70 ? "Moderate edge" : "Needs validation"}</p>
             </section>
             <section className="ref-card reason-card">
               <div className="eyeline">WHY THIS SCORE</div>

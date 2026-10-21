@@ -13,18 +13,29 @@ export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const session = supabase
-    ? (await supabase.auth.getSession()).data.session
-    : null;
-  const response = await fetch(`${apiBase}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      ...options.headers,
-    },
-    cache: "no-store",
-  });
+  const request = async (refresh = false) => {
+    let session = supabase ? (await supabase.auth.getSession()).data.session : null;
+    // An OAuth callback can reach the workspace with an expired token still in
+    // local storage. Refresh before loading saved baskets rather than showing
+    // an empty workspace that only fixes itself after a relogin.
+    if (supabase && session && (refresh || (session.expires_at ?? 0) * 1000 < Date.now() + 15_000)) {
+      session = (await supabase.auth.refreshSession()).data.session;
+    }
+    return fetch(`${apiBase}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        ...options.headers,
+      },
+      cache: "no-store",
+    });
+  };
+  let response = await request();
+  // A token can expire between getSession and the API request. Retry the one
+  // authenticated request after a refresh instead of surfacing a transient
+  // failure during the first dashboard load.
+  if (response.status === 401 && supabase) response = await request(true);
   if (!response.ok) {
     const data = await response
       .json()

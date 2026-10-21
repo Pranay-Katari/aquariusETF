@@ -205,8 +205,12 @@ def validate_symbols(holdings):
             raise HTTPException(422, f"Unavailable ticker: {h.ticker}")
 
 
-def create_portfolio(db, body, user):
-    validate_symbols(body.holdings)
+def create_portfolio(db, body, user, *, symbols_verified=False):
+    # Research flows verify every selected symbol before reaching this write.
+    # Avoid a second set of slow provider calls after a chatbot proposal has
+    # already passed listing validation; manual saves remain fully validated.
+    if not symbols_verified:
+        validate_symbols(body.holdings)
     etf = ETF(
         user_id=user,
         name=body.name,
@@ -252,7 +256,7 @@ def generate_etf(
             proposal, audit = generate(body)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    etf = create_portfolio(db, proposal, user)
+    etf = create_portfolio(db, proposal, user, symbols_verified=True)
     run = ResearchRun(user_id=user, etf_id=etf["id"], payload=audit)
     db.add(run)
     db.commit()
@@ -615,6 +619,14 @@ def walk_forward_validate(
         return weights.max() <= max_weight and effective_holdings >= min_effective_holdings
 
     cfg = body.model_dump(mode="json", exclude={"test_sessions"})
+    # Results are deterministic for this saved basket and configuration. A
+    # short cache makes repeat clicks and aggregate studies near-instant while
+    # avoiding stale results after a portfolio version or input changes.
+    from .services.cache import get_json, key, set_json
+    cache_key = key("walk-forward:v2", {"etf": id, "version": etf.version, "config": cfg})
+    cached = get_json(cache_key)
+    if cached is not None:
+        return cached
     try:
         symbols = sorted({h["ticker"] for h in holdings} | {body.benchmark})
         history = {symbol: market.prices(symbol, body.start_date, body.end_date) for symbol in symbols}
@@ -639,7 +651,10 @@ def walk_forward_validate(
             else:
                 seen = {tuple(candidates[0])}
                 attempts = 0
-                while len(candidates) < 300 and attempts < 30_000:
+                # 120 deterministic, diversified candidates per fold gives a
+                # useful robustness check without monopolizing a Cloud Run
+                # request long enough to cause the frontend's timeout loop.
+                while len(candidates) < 120 and attempts < 12_000:
                     attempts += 1
                     proposal = np.ones(count, dtype=int) + rng.multinomial(
                         100 - count, rng.dirichlet(np.full(count, 2.5))
@@ -648,7 +663,7 @@ def walk_forward_validate(
                     if key not in seen and diversified(proposal):
                         candidates.append(proposal)
                         seen.add(key)
-                if len(candidates) < 300:
+                if len(candidates) < 120:
                     raise MarketError(
                         "Could not generate enough diversified allocations for walk-forward validation. "
                         "Add holdings or use a less concentrated basket."
@@ -721,7 +736,7 @@ def walk_forward_validate(
         verdict = "The diversified optimizer improved on equal weights, but has not shown reliable benchmark outperformance."
     else:
         verdict = "No reliable out-of-sample advantage was found; prefer the benchmark or equal weights."
-    return {
+    response = {
         "folds": folds,
         "summary": {
             "median_unseen_return": float(np.median(unseen_returns)),
@@ -740,6 +755,8 @@ def walk_forward_validate(
         "verdict": verdict,
         "warning": "Each fold selects weights using only prior data, then compares them on unseen sessions against equal-weight, original-weight, and market benchmarks. This reduces, but does not eliminate, selection bias; it is not a forecast or recommendation.",
     }
+    set_json(cache_key, response, ttl_seconds=900)
+    return response
 
 
 @app.get("/v1/etfs/{id}/backtests")
