@@ -11,6 +11,7 @@ def test_openrouter_transport_and_citations(monkeypatch):
         assert url == "https://openrouter.ai/api/v1/chat/completions"
         assert kwargs["json"]["model"] == settings.llm_model
         assert kwargs["json"]["plugins"] == [{"id": "web", "max_results": 5}]
+        assert kwargs["json"]["max_tokens"] == 2200
         return httpx.Response(
             200,
             request=httpx.Request("POST", url),
@@ -51,6 +52,7 @@ def test_openrouter_structured_extraction(monkeypatch):
         assert "plugins" not in body
         assert body["provider"]["require_parameters"] is True
         assert body["response_format"]["json_schema"]["name"] == "proposal"
+        assert body["max_tokens"] == 4096
         return httpx.Response(
             200,
             request=httpx.Request("POST", url),
@@ -66,6 +68,32 @@ def test_openrouter_structured_extraction(monkeypatch):
                 "format": {
                     "type": "json_schema",
                     "name": "proposal",
+                    "schema": {},
+                    "strict": True,
+                }
+            },
+        }
+    )
+
+
+def test_openrouter_themed_basket_extraction_uses_compact_budget(monkeypatch):
+    def post(url, **kwargs):
+        assert kwargs["json"]["max_tokens"] == 1800
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]},
+        )
+
+    monkeypatch.setattr(openrouter.httpx, "post", post)
+    openrouter.call_openrouter(
+        {
+            "instructions": "Extract",
+            "input": "Evidence",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "thematic_portfolio",
                     "schema": {},
                     "strict": True,
                 }

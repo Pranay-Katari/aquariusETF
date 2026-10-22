@@ -11,19 +11,26 @@ logger = logging.getLogger(__name__)
 
 
 def call_openrouter(payload):
+    format_name = payload.get("text", {}).get("format", {}).get("name")
+    # Research needs a concise candidate brief; extraction only needs a compact
+    # structured basket. The previous 6k-token allowance on both calls made a
+    # normal eight-holding build wait for far more generation than the UI uses.
+    max_tokens = (
+        2200
+        if payload.get("tools")
+        else 1800
+        if format_name == "thematic_portfolio"
+        else 4096
+    )
     body = {
         "model": settings.llm_model,
         "messages": [
             {"role": "system", "content": payload["instructions"]},
             {"role": "user", "content": payload["input"]},
         ],
-        # Web research and structured extraction do not need a 16k completion
-        # allowance.  Keeping this bounded improves provider routing coverage
-        # and prevents a short basket request from reserving an oversized output.
-        "max_tokens": 6000
-        if payload.get("tools")
-        or payload.get("text", {}).get("format", {}).get("name") == "thematic_portfolio"
-        else 4096,
+        # Keep outputs proportional to the compact research/extraction work so
+        # short basket requests do not reserve oversized provider generations.
+        "max_tokens": max_tokens,
         "temperature": 0.2,
     }
     if payload.get("tools"):
