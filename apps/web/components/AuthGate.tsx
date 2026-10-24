@@ -15,18 +15,41 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
       return;
     }
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        if (!mounted) return;
-        if (!session) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
-        else setReady(true);
-      })
-      .catch(() => router.replace(`/login?next=${encodeURIComponent(pathname)}`));
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
-      else if (mounted) setReady(true);
+    const client = supabase;
+    const verifySession = async () => {
+      // Do not mount the workspace from an old local-storage token.  That was
+      // allowing its one-time basket request to run before Supabase completed
+      // the OAuth/session refresh, leaving the dashboard looking empty.
+      const {
+        data: { session },
+      } = await client.auth.getSession();
+      if (!session) throw new Error("No session");
+      const { data, error } = await client.auth.refreshSession();
+      if (error || !data.session)
+        throw error ?? new Error("Session refresh failed");
+      const verified = await client.auth.getUser();
+      if (verified.error || !verified.data.user) {
+        throw verified.error ?? new Error("Session verification failed");
+      }
+      if (mounted) setReady(true);
+    };
+
+    setReady(false);
+    verifySession().catch(() => {
+      if (mounted)
+        router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     });
-    return () => { mounted = false; subscription.subscription.unsubscribe(); };
+    const { data: subscription } = client.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === "SIGNED_OUT" || !session) {
+          router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+        }
+      },
+    );
+    return () => {
+      mounted = false;
+      subscription.subscription.unsubscribe();
+    };
   }, [pathname, router]);
 
   if (!ready) return <main aria-busy="true" />;
