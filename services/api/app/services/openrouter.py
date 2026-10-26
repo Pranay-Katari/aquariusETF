@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 def call_openrouter(payload):
     format_name = payload.get("text", {}).get("format", {}).get("name")
     # Research needs a concise candidate brief; extraction only needs a compact
-    # structured basket. The previous 6k-token allowance on both calls made a
-    # normal eight-holding build wait for far more generation than the UI uses.
+    # structured basket. Keep both stages within the compact response size the
+    # UI actually presents, rather than reserving a long generation.
     max_tokens = (
-        2200
+        1200
         if payload.get("tools")
-        else 1800
+        else 900
         if format_name == "thematic_portfolio"
         else 4096
     )

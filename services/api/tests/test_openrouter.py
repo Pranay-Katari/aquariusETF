@@ -11,7 +11,7 @@ def test_openrouter_transport_and_citations(monkeypatch):
         assert url == "https://openrouter.ai/api/v1/chat/completions"
         assert kwargs["json"]["model"] == settings.llm_model
         assert kwargs["json"]["plugins"] == [{"id": "web", "max_results": 5}]
-        assert kwargs["json"]["max_tokens"] == 2200
+        assert kwargs["json"]["max_tokens"] == 1200
         return httpx.Response(
             200,
             request=httpx.Request("POST", url),
@@ -78,7 +78,7 @@ def test_openrouter_structured_extraction(monkeypatch):
 
 def test_openrouter_themed_basket_extraction_uses_compact_budget(monkeypatch):
     def post(url, **kwargs):
-        assert kwargs["json"]["max_tokens"] == 1800
+        assert kwargs["json"]["max_tokens"] == 900
         return httpx.Response(
             200,
             request=httpx.Request("POST", url),
