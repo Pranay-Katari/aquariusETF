@@ -148,8 +148,19 @@ export default function Workspace() {
   ) : null;
   const load = useCallback(async () => {
     const list = await api<ETF[]>("/v1/etfs");
-    setPortfolios(list);
-    return list;
+    // OAuth redirects may reach the workspace before browser storage has
+    // settled. Retry an empty first response once so saved baskets show
+    // without requiring navigation.
+    const settledList = list.length
+      ? list
+      : await new Promise<ETF[]>((resolve, reject) =>
+          window.setTimeout(
+            () => void api<ETF[]>("/v1/etfs").then(resolve, reject),
+            350,
+          ),
+        );
+    setPortfolios(settledList);
+    return settledList;
   }, []);
   const open = useCallback(async (etf: ETF) => {
     setSelected(etf);
